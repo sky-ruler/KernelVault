@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#0369a1" stop-opacity="0.2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Rounded Badge -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#shieldGrad)" stroke="#38bdf8" stroke-width="2" stroke-opacity="0.4"/>
+
+  <!-- Shield Base -->
+  <path d="M64 20 L96 34 V66 C96 86 64 104 64 104 C64 104 32 86 32 66 V34 Z" fill="#0f172a" stroke="url(#accentGrad)" stroke-width="3"/>
+
+  <!-- Cryptographic Grid Matrix Accents -->
+  <path d="M48 48 H80 M48 64 H80 M48 80 H80" stroke="#38bdf8" stroke-width="1" stroke-opacity="0.2" stroke-dasharray="2 2"/>
+  <path d="M64 40 V90" stroke="#38bdf8" stroke-width="1" stroke-opacity="0.2" stroke-dasharray="2 2"/>
+
+  <!-- Shackle -->
+  <path d="M52 56 V46 C52 39.37 57.37 34 64 34 C70.63 34 76 39.37 76 46 V56" fill="none" stroke="url(#accentGrad)" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Lock Body -->
+  <rect x="46" y="56" width="36" height="30" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="2.5"/>
+
+  <!-- Keyhole -->
+  <circle cx="64" cy="68" r="4" fill="#38bdf8"/>
+  <polygon points="62,68 66,68 67,77 61,77" fill="#38bdf8"/>
+
+  <!-- Subtle Core Pulse Node -->
+  <circle cx="64" cy="68" r="1.5" fill="#f8fafc"/>
+</svg>

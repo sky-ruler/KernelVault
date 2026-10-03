@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=KernelVault
+GenericName=Secure Encrypted Vault
+Comment=High-Assurance Linux Kernel-Assisted Encrypted Storage
+Exec=kvault-gui
+Icon=kvault
+Terminal=false
+Categories=Utility;Security;Cryptography;
+Keywords=encryption;security;vault;crypto;aes;argon2;
+StartupNotify=true

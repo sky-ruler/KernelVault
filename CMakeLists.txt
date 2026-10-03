@@ -78,6 +78,22 @@ endif()
 
 install(TARGETS kvault RUNTIME DESTINATION bin)
 install(DIRECTORY include/ DESTINATION include/kvault FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+install(FILES packaging/kvault.desktop DESTINATION share/applications)
+install(FILES packaging/icons/kvault.svg DESTINATION share/icons/hicolor/scalable/apps)
+install(FILES packaging/udev/99-kvault.rules DESTINATION lib/udev/rules.d)
+install(DIRECTORY docs/ DESTINATION share/doc/kvault FILES_MATCHING PATTERN "*.md")
+
+# CPack Packaging Configuration
+set(CPACK_PACKAGE_NAME "kvault")
+set(CPACK_PACKAGE_VENDOR "KernelVault Team")
+set(CPACK_PACKAGE_CONTACT "Sky Ruler <skyruler3281@gmail.com>")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Linux kernel-assisted high-assurance encrypted file vault")
+set(CPACK_PACKAGE_VERSION "3.0.0")
+set(CPACK_GENERATOR "DEB;TGZ")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "${CPACK_PACKAGE_CONTACT}")
+set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.34), libstdc++6 (>= 12)")
+include(CPack)
 
 option(BUILD_TESTING "Build the C++ test suite" ON)
 if(BUILD_TESTING)
