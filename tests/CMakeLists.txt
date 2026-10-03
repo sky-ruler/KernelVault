@@ -51,3 +51,5 @@ add_individual_test(test_unique_fd test_unique_fd.cpp)
 add_individual_test(test_file_lock test_file_lock.cpp)
 add_individual_test(test_atomic_write test_atomic_write.cpp)
 add_individual_test(test_vault_integration test_vault_integration.cpp)
+
+add_subdirectory(fuzz)
