@@ -1,0 +1,57 @@
+# CMake and compiler output
+/build/
+/build-*/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Native binaries and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+
+# Linux kernel module output
+*.ko
+*.ko.cmd
+*.mod
+*.mod.c
+*.mod.o
+*.mod.cmd
+*.order
+*.symvers
+.*.cmd
+.*.o
+Module.symvers
+modules.order
+.tmp_versions/
+
+# Test, coverage, and sanitizer output
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+
+# Local vault data and runtime files
+vault.meta
+records/
+locks/
+*.lock
+*.tmp
+
+# IDE and operating system files
+.vscode/
+.idea/
+.vs/
+*.user
+*.suo
+.DS_Store
+Thumbs.db

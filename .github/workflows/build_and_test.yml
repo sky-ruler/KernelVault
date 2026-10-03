@@ -1,0 +1,57 @@
+name: Linux C/C++ CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  user-space:
+    name: C++20 build and tests (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libgtest-dev qt6-base-dev cppcheck
+      - name: Configure
+        env:
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DBUILD_GUI=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Run C++ tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Analyze core C++ source
+        run: >-
+          cppcheck --enable=warning,style,performance,portability
+          --suppress=missingIncludeSystem --error-exitcode=1 --std=c++20 -I include
+          src/main.cpp src/VaultManager.cpp src/UniqueFd.cpp src/FileLock.cpp
+          src/AtomicFileWriter.cpp src/KeyDerivation.cpp
+
+  kernel-module:
+    name: Linux kernel module build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools and kernel headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential kmod linux-headers-generic
+      - name: Build module against installed headers
+        shell: bash
+        run: |
+          headers="$(find /usr/src -mindepth 1 -maxdepth 1 -type d -name 'linux-headers-*-generic' | sort -V | tail -n 1)"
+          if [[ -z "$headers" ]]; then
+            echo "No generic Linux kernel headers were installed" >&2
+            exit 1
+          fi
+          make -C driver KDIR="$headers"
+          modinfo driver/kvault.ko

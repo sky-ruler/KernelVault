@@ -1,0 +1,6 @@
+# Kbuild for kvault kernel module
+obj-m += kvault.o
+kvault-objs := kvault_module.o
+
+# Compilation flags: strict warning level and include paths
+ccflags-y += -I$(src)/../include -Wall -Wextra
