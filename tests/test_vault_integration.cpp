@@ -45,6 +45,28 @@ protected:
         return p;
     }
 
+    static std::vector<uint8_t> readBinaryFile(const std::filesystem::path& path) {
+        std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+        if (!ifs.is_open()) return {};
+        const auto size = ifs.tellg();
+        ifs.seekg(0, std::ios::beg);
+        if (size <= 0) return {};
+        std::vector<uint8_t> buf(static_cast<size_t>(size));
+        ifs.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(size));
+        return buf;
+    }
+
+    static std::string readTextFile(const std::filesystem::path& path) {
+        std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+        if (!ifs.is_open()) return {};
+        const auto size = ifs.tellg();
+        ifs.seekg(0, std::ios::beg);
+        if (size <= 0) return {};
+        std::string s(static_cast<size_t>(size), '\0');
+        ifs.read(s.data(), static_cast<std::streamsize>(size));
+        return s;
+    }
+
     std::filesystem::path m_vaultDir;
     std::filesystem::path m_scratchDir;
 };
@@ -83,13 +105,7 @@ TEST_F(VaultIntegrationTest, EncryptDecryptRoundTripSmallFile) {
     // Verify bit-for-bit equality
     EXPECT_EQ(std::filesystem::file_size(sourcePath), std::filesystem::file_size(restoredPath));
 
-    std::ifstream orig(sourcePath, std::ios::binary);
-    std::ifstream rest(restoredPath, std::ios::binary);
-
-    std::vector<uint8_t> origData((std::istreambuf_iterator<char>(orig)), {});
-    std::vector<uint8_t> restData((std::istreambuf_iterator<char>(rest)), {});
-
-    EXPECT_EQ(origData, restData);
+    EXPECT_EQ(readBinaryFile(sourcePath), readBinaryFile(restoredPath));
 }
 
 TEST_F(VaultIntegrationTest, EncryptDecryptMultiChunkLargeFile) {
@@ -108,13 +124,7 @@ TEST_F(VaultIntegrationTest, EncryptDecryptMultiChunkLargeFile) {
 
     EXPECT_EQ(std::filesystem::file_size(sourcePath), std::filesystem::file_size(restoredPath));
 
-    std::ifstream orig(sourcePath, std::ios::binary);
-    std::ifstream rest(restoredPath, std::ios::binary);
-
-    std::vector<uint8_t> origData((std::istreambuf_iterator<char>(orig)), {});
-    std::vector<uint8_t> restData((std::istreambuf_iterator<char>(rest)), {});
-
-    EXPECT_EQ(origData, restData);
+    EXPECT_EQ(readBinaryFile(sourcePath), readBinaryFile(restoredPath));
 }
 
 TEST_F(VaultIntegrationTest, RejectIncorrectPassphrase) {
@@ -443,11 +453,7 @@ TEST_F(VaultIntegrationTest, DirectoryArchivingRoundTrip) {
     ASSERT_EQ(::stat((restoredDir / "subdir" / "run.sh").c_str(), &runStat), 0);
     EXPECT_EQ(runStat.st_mode & 07777, 0755U);
 
-    std::ifstream origFile(f1);
-    std::ifstream restFile(restoredDir / "readme.txt");
-    std::string origContent((std::istreambuf_iterator<char>(origFile)), {});
-    std::string restContent((std::istreambuf_iterator<char>(restFile)), {});
-    EXPECT_EQ(origContent, restContent);
+    EXPECT_EQ(readTextFile(f1), readTextFile(restoredDir / "readme.txt"));
 }
 
 TEST_F(VaultIntegrationTest, MicroBenchmarkExecution) {

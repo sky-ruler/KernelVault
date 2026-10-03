@@ -18,6 +18,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    # Prevent GCC 12/13/14 known optimizer false-positive in libstdc++ inlined headers
+    add_compile_options(-Wno-error=null-dereference)
+endif()
+
 option(ENABLE_ASAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 if(ENABLE_ASAN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)

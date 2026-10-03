@@ -20,7 +20,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libgtest-dev qt6-base-dev cppcheck
+          sudo apt-get install -y build-essential cmake libgtest-dev qt6-base-dev cppcheck clang
 
       - name: Configure CMake
         env:
@@ -31,7 +31,7 @@ jobs:
       - name: Build Targets
         run: cmake --build build --parallel
 
-      - name: Run Test Suite (32 Tests)
+      - name: Run Test Suite (34 Tests)
         run: ctest --test-dir build --output-on-failure
 
       - name: Run Benchmarking Self-Test
