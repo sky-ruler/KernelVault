@@ -43,8 +43,8 @@ bool isValidVaultFilename(std::string_view filename) {
 
 class SoftwareAes256 {
 public:
-    static constexpr size_t BLOCK_SIZE = 16;
-    static constexpr size_t KEY_SIZE = 32;
+    [[maybe_unused]] static constexpr size_t BLOCK_SIZE = 16;
+    [[maybe_unused]] static constexpr size_t KEY_SIZE = 32;
     static constexpr size_t ROUND_KEYS_SIZE = 240; // (14 + 1) * 16
 
     static void expandKey(std::span<const uint8_t, 32> key, uint8_t* roundKeys) noexcept {

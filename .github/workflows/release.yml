@@ -35,7 +35,7 @@ jobs:
           mkdir -p dist
           cpack --config build/CPackConfig.cmake -B dist
           cd dist
-          sha256sum * > SHA256SUMS.txt
+          sha256sum *.deb *.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
