@@ -172,25 +172,26 @@ private:
     }
 
     static uint8_t xtime(uint8_t x) noexcept {
-        return (x << 1) ^ (((x >> 7) & 1) * 0x1b);
+        return static_cast<uint8_t>((static_cast<uint32_t>(x) << 1) ^ (((static_cast<uint32_t>(x) >> 7) & 1U) * 0x1bU));
     }
 
     static uint8_t multiply(uint8_t x, uint8_t y) noexcept {
-        return (((y & 1) * x) ^
-                ((y >> 1 & 1) * xtime(x)) ^
-                ((y >> 2 & 1) * xtime(xtime(x))) ^
-                ((y >> 3 & 1) * xtime(xtime(xtime(x)))) ^
-                ((y >> 4 & 1) * xtime(xtime(xtime(xtime(x))))));
+        return static_cast<uint8_t>(
+            ((static_cast<uint32_t>(y) & 1U) * static_cast<uint32_t>(x)) ^
+            (((static_cast<uint32_t>(y) >> 1) & 1U) * static_cast<uint32_t>(xtime(x))) ^
+            (((static_cast<uint32_t>(y) >> 2) & 1U) * static_cast<uint32_t>(xtime(xtime(x)))) ^
+            (((static_cast<uint32_t>(y) >> 3) & 1U) * static_cast<uint32_t>(xtime(xtime(xtime(x))))) ^
+            (((static_cast<uint32_t>(y) >> 4) & 1U) * static_cast<uint32_t>(xtime(xtime(xtime(xtime(x)))))));
     }
 
     static void mixColumns(uint8_t* state) noexcept {
         for (int i = 0; i < 4; ++i) {
             uint8_t* c = state + i * 4;
             uint8_t a = c[0], b = c[1], d = c[2], e = c[3];
-            c[0] = xtime(a) ^ (b ^ xtime(b)) ^ d ^ e;
-            c[1] = a ^ xtime(b) ^ (d ^ xtime(d)) ^ e;
-            c[2] = a ^ b ^ xtime(d) ^ (e ^ xtime(e));
-            c[3] = (a ^ xtime(a)) ^ b ^ d ^ xtime(e);
+            c[0] = static_cast<uint8_t>(xtime(a) ^ (b ^ xtime(b)) ^ d ^ e);
+            c[1] = static_cast<uint8_t>(a ^ xtime(b) ^ (d ^ xtime(d)) ^ e);
+            c[2] = static_cast<uint8_t>(a ^ b ^ xtime(d) ^ (e ^ xtime(e)));
+            c[3] = static_cast<uint8_t>((a ^ xtime(a)) ^ b ^ d ^ xtime(e));
         }
     }
 
@@ -198,10 +199,10 @@ private:
         for (int i = 0; i < 4; ++i) {
             uint8_t* c = state + i * 4;
             uint8_t a = c[0], b = c[1], d = c[2], e = c[3];
-            c[0] = multiply(a, 0x0e) ^ multiply(b, 0x0b) ^ multiply(d, 0x0d) ^ multiply(e, 0x09);
-            c[1] = multiply(a, 0x09) ^ multiply(b, 0x0e) ^ multiply(d, 0x0b) ^ multiply(e, 0x0d);
-            c[2] = multiply(a, 0x0d) ^ multiply(b, 0x09) ^ multiply(d, 0x0e) ^ multiply(e, 0x0b);
-            c[3] = multiply(a, 0x0b) ^ multiply(b, 0x0d) ^ multiply(d, 0x09) ^ multiply(e, 0x0e);
+            c[0] = static_cast<uint8_t>(multiply(a, 0x0e) ^ multiply(b, 0x0b) ^ multiply(d, 0x0d) ^ multiply(e, 0x09));
+            c[1] = static_cast<uint8_t>(multiply(a, 0x09) ^ multiply(b, 0x0e) ^ multiply(d, 0x0b) ^ multiply(e, 0x0d));
+            c[2] = static_cast<uint8_t>(multiply(a, 0x0d) ^ multiply(b, 0x09) ^ multiply(d, 0x0e) ^ multiply(e, 0x0b));
+            c[3] = static_cast<uint8_t>(multiply(a, 0x0b) ^ multiply(b, 0x0d) ^ multiply(d, 0x09) ^ multiply(e, 0x0e));
         }
     }
 };
