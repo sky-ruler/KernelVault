@@ -1,0 +1,65 @@
+name: "🐛 Bug Report"
+description: "Submit a reproducible defect, crash, or build failure in KernelVault"
+title: "[BUG]: <concise description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! If this is a **security vulnerability**, please stop and refer to [SECURITY.md](https://github.com/skyruler3281/KernelVault/blob/main/SECURITY.md) instead of filing a public issue.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Select the subsystem where the failure occurred.
+      options:
+        - "CLI Runtime (kvault)"
+        - "Desktop GUI (kvault-gui)"
+        - "Linux Kernel Character Driver (/dev/kvault)"
+        - "Key Derivation & PBKDF2 Service"
+        - "Directory Archiver (KVDIR1)"
+        - "Atomic File Writer / POSIX Locking"
+        - "Build System / Packaging / CPack"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the defect encountered.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      description: Complete command-line reproduction steps.
+      placeholder: |
+        1. Build with `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`
+        2. Run `build/kvault encrypt ...`
+        3. Observe crash or error output
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment & System Details
+      description: Provide system environment info.
+      placeholder: |
+        - OS / Distro: Ubuntu 24.04 LTS
+        - Kernel: Linux 6.8.0-generic (uname -r)
+        - Compiler: GCC 14.2 / Clang 18
+        - Hardware: x86_64 with AES-NI support
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Sanitizer / dmesg Output
+      description: Paste any crash logs, ASan reports, or `dmesg` kernel messages.
+      render: shell

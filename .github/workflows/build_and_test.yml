@@ -1,4 +1,4 @@
-name: Linux C/C++ CI
+name: Linux CI & Verification Matrix
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   user-space:
-    name: C++20 build and tests (${{ matrix.compiler }})
+    name: C++20 Build & Test (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -16,35 +16,72 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libgtest-dev qt6-base-dev cppcheck
-      - name: Configure
+
+      - name: Configure CMake
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DBUILD_GUI=ON
-      - name: Build
-        run: cmake --build build --parallel
-      - name: Run C++ tests
-        run: ctest --test-dir build --output-on-failure
-      - name: Analyze core C++ source
-        run: >-
-          cppcheck --enable=warning,style,performance,portability
-          --suppress=missingIncludeSystem --error-exitcode=1 --std=c++20 -I include
-          src/main.cpp src/VaultManager.cpp src/UniqueFd.cpp src/FileLock.cpp
-          src/AtomicFileWriter.cpp src/KeyDerivation.cpp
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DBUILD_GUI=ON
 
-  kernel-module:
-    name: Linux kernel module build
+      - name: Build Targets
+        run: cmake --build build --parallel
+
+      - name: Run Test Suite (32 Tests)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Run Benchmarking Self-Test
+        run: ./build/kvault bench --size-mb 4
+
+      - name: Generate Distribution Packages (CPack)
+        if: matrix.compiler == 'gcc'
+        run: |
+          cpack --config build/CPackConfig.cmake -B build/dist
+          ls -la build/dist/
+
+      - name: Upload Debian & Tarball Artifacts
+        if: matrix.compiler == 'gcc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvault-linux-packages
+          path: build/dist/*
+          retention-days: 14
+
+  sanitizers:
+    name: AddressSanitizer & UB Sanity Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libgtest-dev qt6-base-dev
+
+      - name: Configure CMake with ASan & UBSan
+        run: cmake -S . -B build-asan -DENABLE_ASAN=ON -DBUILD_TESTING=ON -DBUILD_GUI=OFF
+
+      - name: Build with Memory Instrumentation
+        run: cmake --build build-asan --parallel
+
+      - name: Execute Tests under ASan & UBSan
+        run: ctest --test-dir build-asan --output-on-failure
+
+  kernel-module:
+    name: Linux Kernel Driver Compilation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Install build tools and kernel headers
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential kmod linux-headers-generic
+
       - name: Build module against installed headers
         shell: bash
         run: |

@@ -1,0 +1,39 @@
+name: "💡 Feature Request"
+description: "Suggest an idea, utility capability, or architectural enhancement for KernelVault"
+title: "[FEAT]: <concise description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We welcome proposals for extending KernelVault! Note that KernelVault is strictly a **Linux-first, high-assurance cryptographic storage tool**. Proposals must fit within our zero-trust security and memory hygiene model.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Is your feature request related to a problem or limitation? Please describe.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution / Architectural Design
+      description: Detailed description of the feature and how it should function.
+    validations:
+      required: true
+
+  - type: textarea
+    id: security_impact
+    attributes:
+      label: Security & Memory Implications
+      description: Does this proposal alter the 96-byte header format, key derivation, or require additional kernel privileges?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative designs or existing tools you have evaluated.

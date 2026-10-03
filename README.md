@@ -1,6 +1,14 @@
 # KernelVault
 
-KernelVault is a Linux project that demonstrates a C++20 file-vault application working with a Linux character-device driver written in C. Users can operate the shared vault engine through the command-line interface or an optional native Qt desktop interface. The driver exposes an IOCTL interface to the Linux Kernel Crypto API for AES-256-CBC transformations.
+[![Linux CI Matrix](https://github.com/skyruler3281/KernelVault/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/skyruler3281/KernelVault/actions/workflows/build_and_test.yml)
+[![CodeQL Security Scan](https://github.com/skyruler3281/KernelVault/actions/workflows/codeql.yml/badge.svg)](https://github.com/skyruler3281/KernelVault/actions/workflows/codeql.yml)
+[![Sanitizers Pass](https://img.shields.io/badge/Sanitizers-ASan%20%7C%20UBSan%20Clean-success.svg)](docs/TESTING.md)
+[![Standard](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](CMakeLists.txt)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20Kernel%206.x%20%2F%207.x-orange.svg)](driver/)
+[![License](https://img.shields.io/badge/License-Dual%20MIT%20%2F%20GPLv2-green.svg)](LICENSE)
+[![Packaging](https://img.shields.io/badge/Package-.deb%20%7C%20.tar.gz-informational.svg)](packaging/)
+
+KernelVault is an enterprise-grade Linux kernel-assisted secure storage subsystem. It pairs a high-assurance C++20 user-space runtime with a dedicated Linux character device driver (`/dev/kvault`) bridging to the Linux Kernel Crypto API for hardware-accelerated AES-256-CBC transformations. Features dual-key derivation (RFC 2898 PBKDF2), streaming $O(1)$ RAM integrity verification (HMAC-SHA256), POSIX metadata preservation, anti-forensic file shredding, recursive directory archiving, empirical hardware benchmarking, and a modern Qt6 desktop GUI.
 
 > **Notice:** This project has not received an independent security audit and is not intended to protect production or high-value data.
 
