@@ -1,0 +1,31 @@
+{
+  "name": "KernelVault Enterprise C++20 & Linux Driver Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/cpp:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "username": "vscode",
+      "userUid": "1000",
+      "userGid": "1000"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "cmake.configureOnOpen": true,
+        "C_Cpp.default.cppStandard": "c++20",
+        "C_Cpp.clang_format_style": "file",
+        "editor.formatOnSave": true
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "bierner.markdown-preview-github-styles"
+      ]
+    }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential cmake libgtest-dev qt6-base-dev kmod linux-headers-generic cppcheck clang-format clang-tidy valgrind && cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DBUILD_GUI=ON && cmake --build build --parallel",
+  "remoteUser": "vscode"
+}
