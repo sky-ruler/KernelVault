@@ -201,7 +201,49 @@ Invoking external `tar` or `zip` processes introduces `fork`/`exec` overhead and
 
 ---
 
-## 3. Architecture Comparison: Toy Script vs. KernelVault
+### J. Empirical Micro-Benchmarking Engine (`kvault bench`)
+
+#### The Decision
+KernelVault embeds an automated cryptographic micro-benchmarking engine directly into the core binary (`kvault bench [--size-mb <N>]`), measuring:
+1. PBKDF2 iteration speed (iterations per second) across 100,000 rounds.
+2. AES-256-CBC streaming throughput across 64 KiB chunks.
+3. HMAC-SHA256 streaming digest throughput in continuous $O(1)$ memory.
+4. Integrated Encrypt-then-MAC streaming pipeline throughput.
+
+#### The Reality Check
+Systems engineering claims without empirical throughput figures are regarded as unverified theory in technical code reviews. Integrating the benchmark directly into the binary allows continuous performance regression tracking in CI/CD without requiring external profilers (`perf`, `valgrind`, `gprof`).
+
+#### The Real-World Precedent
+* **OpenSSL `openssl speed`:** The industry-standard benchmarking tool for comparing cipher algorithms across CPU architectures.
+* **Go Standard Library `testing.B`:** Built-in programmatic benchmark runner ensuring that memory allocations and algorithm iterations are audited continuously.
+
+---
+
+### K. Native Debian Packaging & Udev Security Policy
+
+#### The Decision
+Rather than relying on generic distribution scripts or isolated containers (Flatpak / Snap), KernelVault provides native CPack-generated Debian (`.deb`) and tarball packages, accompanied by a dedicated `udev` rule (`99-kvault.rules`) granting console user access via `TAG+="uaccess"`.
+
+#### The Reality Check
+Kernel-assisted utilities cannot function inside standard sandboxed runtimes (like Snap or Flatpak) because apparmor/seccomp profiles block direct access to custom `/dev` character devices. Direct package installation ensures that the CLI, Qt GUI, udev rules, man pages, and scalable desktop icons are positioned in standard FHS paths (`/usr/bin`, `/usr/lib/udev/rules.d`, `/usr/share/applications`).
+
+---
+
+## 3. Architecture Decision Records (ADR) Index
+
+| ADR ID | Decision Title | Status | Primary Driver |
+| :--- | :--- | :--- | :--- |
+| **ADR-001** | Dual-Key PBKDF2 Separation ($K_{\text{enc}} \neq K_{\text{mac}}$) | **Accepted** | NIST SP 800-108 cryptographic hygiene |
+| **ADR-002** | Canonical Little-Endian Wire Format | **Accepted** | Cross-architecture binary portability (x86_64 & AArch64) |
+| **ADR-003** | Fixed 96-Byte Header Invariant via Reserved Byte Repurposing | **Accepted** | Strict backward compatibility with v1/v2 records |
+| **ADR-004** | Anti-Forensic Multi-Pass Source File Shredding | **Accepted** | NIST SP 800-88 defense against forensic data carving |
+| **ADR-005** | Native `KVDIR1` Directory Archiving (Zero Subprocesses) | **Accepted** | Shell injection defense & Zip-Slip immunity |
+| **ADR-006** | Dual-Engine Fallback (Kernel Driver + Portable C++20) | **Accepted** | Zero-downtime resilience in containerized/unprivileged environments |
+| **ADR-007** | Non-Blocking POSIX Advisory Locking (`fcntl(F_SETLK)`) | **Accepted** | Prevention of multi-process writer collisions and corruption |
+
+---
+
+## 4. Architecture Comparison: Toy Script vs. KernelVault
 
 | Dimension | Typical Beginner Utility | KernelVault Implementation |
 | :--- | :--- | :--- |
@@ -219,7 +261,7 @@ Invoking external `tar` or `zip` processes introduces `fork`/`exec` overhead and
 
 ---
 
-## 4. Key Takeaways for Technical Reviews & Interviews
+## 5. Key Takeaways for Technical Reviews & Interviews
 
 When evaluating or discussing KernelVault, consider the following framing:
 
