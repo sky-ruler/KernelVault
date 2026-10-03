@@ -179,7 +179,38 @@ Choose a vault folder and initialize it. The modernized interface provides three
 
 > **Passphrase handling:** The CLI supports interactive masked input (with terminal echo disabled via POSIX `termios`), pipeline streaming (`--key-stdin`), the `KVAULT_KEY` environment variable, or explicit command-line flags (`--key`). When `--key` is passed via `argv`, process memory is immediately scrubbed in-place to prevent inspection via `ps aux` or `/proc/<pid>/cmdline`. The GUI masks typed passphrases and securely wipes memory upon completion.
 
-The full build and operator workflow is in [`docs/RUNBOOK.md`](docs/RUNBOOK.md); architecture and record format are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); systems engineering rationale and real-world design decisions are in [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md); technical interview defense and architecture FAQ are in [`docs/INTERVIEW_CHEAT_SHEET.md`](docs/INTERVIEW_CHEAT_SHEET.md).
+---
+
+## Architectural Comparison Matrix
+
+| Feature / Architectural Quality | KernelVault v3 | GnuPG (GPG) | OpenSSL CLI Scripts | Linux LUKS / dm-crypt |
+| :--- | :---: | :---: | :---: | :---: |
+| **Isolation Model** | **Application Per-Record** | Application Per-Record | Application Per-File | Whole Block Device |
+| **Kernel Hardware Acceleration** | **Native Character Driver (`/dev/kvault`)** | User-Space Only | User-Space Only | Native In-Kernel |
+| **Subprocess Execution (`execve`)** | **Zero (Native C++20 / C)** | Daemon / Subprocess | Shell / Subprocess Spawning | Zero (Kernel Module) |
+| **Crash Consistency & Durability** | **Atomic `renameat2` + Directory `fsync`** | Temporary File Swap | In-Place Overwrite (Corruptible) | Block-Level Journaling |
+| **Memory Pinning & Swap Prevention** | **`mlock(2)` + `MADV_DONTDUMP`** | Secure Memory Allocator | Unpinned Userland Heap | Kernel Unswappable Pages |
+| **Dead-Store Elimination Defense** | **`secureZero` Volatile Barrier + `memzero_explicit`** | Custom Scrubber | Generic `OPENSSL_cleanse` | Kernel `memzero_explicit` |
+| **Anti-Forensic File Shredding** | **Built-in CSPRNG Multi-Pass (`--shred`)** | Requires external `shred` | Requires external `shred` | Block Discard / Trim |
+| **Directory Hierarchy Archiving** | **Native `KVDIR1` (Zip-Slip Immune)** | Spawns external `tar` | Spawns external `tar` | Filesystem-level |
+| **Multi-Process Concurrency** | **Non-blocking POSIX `fcntl(F_SETLK)`** | Lockfile heuristics | None (Race conditions) | Kernel-level locking |
+
+---
+
+## Complete Enterprise Documentation Library
+
+| Document | Purpose & Core Content | Target Audience |
+| :--- | :--- | :--- |
+| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | Deep systems diagrams, 96-byte wire layout, `KVDIR1` binary specification, driver session state machine, memory pinning lifecycle, and ACID durability model. | Systems Architects, Core Developers |
+| **[`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md)** | Engineering rationale, ADR index (ADR-001 to ADR-007), component-by-component real-world industrial precedents, and beginner vs enterprise comparisons. | Senior Reviewers, Evaluators |
+| **[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)** | Formal STRIDE security analysis, asset classification, trust boundary architecture, and concrete mitigations for CBC bit-flipping, zip-slip, and swap leakage. | Security Auditors, Cryptographers |
+| **[`docs/FAQ.md`](docs/FAQ.md)** | Definitive technical FAQ answering "Why this, Why not that?", architectural objections, kernel boundary questions, and failure mode behaviors. | Technical Leads, Evaluators |
+| **[`docs/RUNBOOK.md`](docs/RUNBOOK.md)** | Production operator manual covering initialization, batch encryption, secure shredding, in-place HMAC audits, driver lifecycle, and udev policies. | DevOps, SysAdmins, Operators |
+| **[`docs/TESTING.md`](docs/TESTING.md)** | Verification methodology covering all 34 automated unit, integration, sanitizer (ASan/UBSan), and coverage-guided fuzz testing suites. | QA Engineers, Test Automators |
+| **[`docs/INTERVIEW_CHEAT_SHEET.md`](docs/INTERVIEW_CHEAT_SHEET.md)** | Master technical defense guide deconstructing wrapper objections, GCM nonce-reuse traps, and low-level Linux systems contracts. | Job Candidates, Evaluators |
+| **[`SECURITY.md`](SECURITY.md)** | Coordinated Vulnerability Disclosure (CVD) policy, supported versions matrix, 48-hour response SLA, and confidential reporting channels. | Security Researchers |
+| **[`CONTRIBUTING.md`](CONTRIBUTING.md)** | Development workflow, C++20 invariants, zero-warning compilation barrier (`-Werror`), Conventional Commits, and PR checklist. | Open-Source Contributors |
+| **[`CHANGELOG.md`](CHANGELOG.md)** | Semantic Versioning release notes adhering strictly to the Keep a Changelog standard. | Integrators, Users |
 
 ## Record format
 
