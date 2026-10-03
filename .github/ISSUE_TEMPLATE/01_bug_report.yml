@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for reporting an issue! If this is a **security vulnerability**, please stop and refer to [SECURITY.md](https://github.com/skyruler3281/KernelVault/blob/main/SECURITY.md) instead of filing a public issue.
+        Thank you for reporting an issue! If this is a **security vulnerability**, please stop and refer to [SECURITY.md](https://github.com/sky-ruler/KernelVault/blob/main/SECURITY.md) instead of filing a public issue.
 
   - type: dropdown
     id: component

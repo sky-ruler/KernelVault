@@ -1,7 +1,7 @@
 # KernelVault
 
-[![Linux CI Matrix](https://github.com/skyruler3281/KernelVault/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/skyruler3281/KernelVault/actions/workflows/build_and_test.yml)
-[![CodeQL Security Scan](https://github.com/skyruler3281/KernelVault/actions/workflows/codeql.yml/badge.svg)](https://github.com/skyruler3281/KernelVault/actions/workflows/codeql.yml)
+[![Linux CI Matrix](https://github.com/sky-ruler/KernelVault/actions/workflows/build_and_test.yml/badge.svg)](https://github.com/sky-ruler/KernelVault/actions/workflows/build_and_test.yml)
+[![CodeQL Security Scan](https://github.com/sky-ruler/KernelVault/actions/workflows/codeql.yml/badge.svg)](https://github.com/sky-ruler/KernelVault/actions/workflows/codeql.yml)
 [![Sanitizers Pass](https://img.shields.io/badge/Sanitizers-ASan%20%7C%20UBSan%20Clean-success.svg)](docs/TESTING.md)
 [![Standard](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](CMakeLists.txt)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20Kernel%206.x%20%2F%207.x-orange.svg)](driver/)

@@ -6,31 +6,31 @@
 # ==============================================================================
 
 # Global Project Lead
-* @skyruler3281
+* @sky-ruler
 
 # Linux Kernel Character Driver Subsystem
-/driver/ @skyruler3281
+/driver/ @sky-ruler
 
 # Core Cryptographic Primitives & Memory Hygiene (Critical Path)
-/include/KeyDerivation.hpp @skyruler3281
-/include/PinnedMemory.hpp   @skyruler3281
-/src/KeyDerivation.cpp     @skyruler3281
+/include/KeyDerivation.hpp @sky-ruler
+/include/PinnedMemory.hpp   @sky-ruler
+/src/KeyDerivation.cpp     @sky-ruler
 
 # Vault Storage Orchestration & Atomic File Engine
-/include/VaultManager.hpp     @skyruler3281
-/src/VaultManager.cpp         @skyruler3281
-/include/AtomicFileWriter.hpp @skyruler3281
-/src/AtomicFileWriter.cpp     @skyruler3281
-/include/FileLock.hpp         @skyruler3281
-/src/FileLock.cpp             @skyruler3281
+/include/VaultManager.hpp     @sky-ruler
+/src/VaultManager.cpp         @sky-ruler
+/include/AtomicFileWriter.hpp @sky-ruler
+/src/AtomicFileWriter.cpp     @sky-ruler
+/include/FileLock.hpp         @sky-ruler
+/src/FileLock.cpp             @sky-ruler
 
 # Desktop GUI Subsystem & Packaging
-/src/gui_main.cpp @skyruler3281
-/packaging/       @skyruler3281
+/src/gui_main.cpp @sky-ruler
+/packaging/       @sky-ruler
 
 # Automated Testing Harness & CTest Suites
-/tests/ @skyruler3281
+/tests/ @sky-ruler
 
 # DevOps, CI/CD GitHub Actions & Build System
-/.github/       @skyruler3281
-/CMakeLists.txt @skyruler3281
+/.github/       @sky-ruler
+/CMakeLists.txt @sky-ruler
