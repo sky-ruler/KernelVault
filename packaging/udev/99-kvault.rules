@@ -1,0 +1,4 @@
+# KernelVault character device rule
+# Allows non-root users and active desktop sessions to access hardware-assisted /dev/kvault
+KERNEL=="kvault", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="kvault_class", KERNEL=="kvault", MODE="0666", TAG+="uaccess"
