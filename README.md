@@ -54,6 +54,9 @@ The driver performs cipher transformations. The C++ application derives keys and
 - Qt 6.2 or newer (`qt6-base-dev`) to build the optional desktop GUI
 - Matching Linux kernel headers only when building the optional driver module
 
+> [!TIP]
+> **First time using KernelVault?** Read the **[Beginner's Step-by-Step Guide & Tutorial](docs/GETTING_STARTED.md)** for a zero-to-hero walkthrough with plain-English diagrams, 6 practical tutorials, and solutions to common beginner gotchas!
+
 ## Quick start (Linux or Ubuntu on WSL2)
 
 On Windows, if WSL2 is not installed yet, run this once from PowerShell as Administrator:
@@ -201,6 +204,7 @@ Choose a vault folder and initialize it. The modernized interface provides three
 
 | Document | Purpose & Core Content | Target Audience |
 | :--- | :--- | :--- |
+| **[`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)** | Step-by-step tutorial from scratch, core concepts in plain English, 6 guided walk-throughs, and beginner gotchas. | Newcomers, Students, Evaluators |
 | **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | Deep systems diagrams, 96-byte wire layout, `KVDIR1` binary specification, driver session state machine, memory pinning lifecycle, and ACID durability model. | Systems Architects, Core Developers |
 | **[`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md)** | Engineering rationale, ADR index (ADR-001 to ADR-007), component-by-component real-world industrial precedents, and beginner vs enterprise comparisons. | Senior Reviewers, Evaluators |
 | **[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)** | Formal STRIDE security analysis, asset classification, trust boundary architecture, and concrete mitigations for CBC bit-flipping, zip-slip, and swap leakage. | Security Auditors, Cryptographers |
