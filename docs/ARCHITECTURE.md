@@ -111,8 +111,142 @@ Version 3 records consist of a packed 96-byte header followed by AES-256-CBC cip
 | `0x5C` | 4 bytes | Modified Epoch | Modification timestamp (seconds since Unix epoch, Little-Endian). |
 | `0x60` | Variable | Ciphertext | AES-256-CBC encrypted streaming payload ($K_{\text{enc}}$). |
 
-## Directory Archiving Engine
+### Wire Layout Representation
 
-KernelVault provides recursive directory vaulting without external `tar` or subprocess dependencies:
-- **Archiving (`encryptDirectory`):** Recursively walks folder trees via `std::filesystem::recursive_directory_iterator`, packing entry types, permissions, timestamps, relative paths, and file payloads into a self-contained binary pack (`KVDIR1`), which is then streamed into an authenticated `.kvdir` vault record.
-- **Unpacking (`decryptDirectory`):** Authenticates and decrypts the archive, sanitizes all entry paths against directory traversal attacks (`..` and leading `/` rejected), creates directories, extracts file contents, and restores exact POSIX permissions and timestamps.
+```text
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                      Magic (0x4B564C54)                       |  0x00
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                   Version (0x00000003)                        |  0x04
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |  0x08
++                      Salt (16 Bytes)                          +
+|                                                               |  0x14
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |  0x18
++              Initialization Vector (16 Bytes)                 +
+|                                                               |  0x24
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Original Plaintext Size (Low)                |  0x28
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Original Plaintext Size (High)               |  0x2C
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Ciphertext Payload Size (Low)                |  0x30
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Ciphertext Payload Size (High)               |  0x34
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |  0x38
++                   HMAC-SHA256 Authentication                  +
++                       Tag (32 Bytes)                          +
+|                                                               |  0x54
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               POSIX File Mode (st_mode & 07777)               |  0x58
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|           Modification Timestamp (Epoch Seconds)              |  0x5C
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                     Ciphertext Data Stream ...                |  0x60
+```
+
+## Directory Archiving Engine (`KVDIR1` Format)
+
+KernelVault packs directory trees natively without spawning `tar` or `zip` subprocesses, eliminating shell injection hazards and zero-day compression library vulnerabilities:
+
+```text
++---------------------------------------------------------------+
+|  KVDIR1 Magic (8 Bytes): "KVDIR01\n"                          |
++---------------------------------------------------------------+
+|  Total Directory Entries (uint64_t Little-Endian)             |
++---------------------------------------------------------------+
+|  Entry #1 Header:                                             |
+|    - Path Length (uint32_t LE)                                |
+|    - Relative Path (UTF-8 bytes, e.g. "subdir/config.json")   |
+|    - Entry Type: 0x01 = Regular File, 0x02 = Directory        |
+|    - POSIX Mode (uint32_t LE)                                 |
+|    - Modification Epoch (uint32_t LE)                         |
+|    - Payload Size (uint64_t LE, 0 if directory)               |
+|  Entry #1 Payload Bytes ...                                   |
++---------------------------------------------------------------+
+|  Entry #2 Header ...                                          |
+|  Entry #2 Payload Bytes ...                                   |
++---------------------------------------------------------------+
+```
+
+### Path Traversal Defense
+When unpacking `KVDIR1` archives, `decryptDirectory()` validates every entry path:
+1. Rejects any path starting with `/` or `\\` (prevents absolute path overwrites).
+2. Rejects any path containing `..` (prevents directory escapes).
+3. Rejects empty path tokens.
+4. Normalizes destination path via `std::filesystem::path::lexically_normal()` and verifies that it resides strictly inside the user's chosen output directory.
+
+## Memory Pinning & Zeroization Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Allocation: PinnedMemory<N>() Constructor
+    Allocation --> MemoryLock: ::mlock(buffer, N)
+    MemoryLock --> AntiDump: ::madvise(buffer, N, MADV_DONTDUMP)
+    AntiDump --> ActiveUse: Key Derivation / Transformation
+    ActiveUse --> VolatileZero: secureZero() / memzero_explicit()
+    VolatileZero --> MemoryBarrier: asm volatile("" : : "r"(p) : "memory")
+    MemoryBarrier --> MemoryUnlock: ::munlock(buffer, N)
+    MemoryUnlock --> Destruction: Buffer Deallocated
+    Destruction --> [*]
+```
+
+## Linux Kernel Driver Session State Machine
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor App as User-Space (VaultManager)
+    participant Dev as Character Device (/dev/kvault)
+    participant Driver as Kernel Module (kvault_module.c)
+    participant CryptoAPI as Linux Kernel Crypto API
+
+    App->>Dev: open("/dev/kvault", O_RDWR)
+    Dev->>Driver: kvault_open()
+    Note over Driver: kzalloc(struct kvault_session)<br/>mutex_init(&sess->session_lock)<br/>file->private_data = sess
+    Driver-->>App: fd (UniqueFd)
+
+    App->>Driver: ioctl(fd, KVAULT_IOCTL_SET_MODE, KVAULT_MODE_ENCRYPT)
+    Driver->>CryptoAPI: crypto_alloc_sync_skcipher("cbc(aes)", 0, 0)
+    CryptoAPI-->>Driver: struct crypto_sync_skcipher*
+
+    App->>Driver: ioctl(fd, KVAULT_IOCTL_SET_KEY, &key_param)
+    Driver->>CryptoAPI: crypto_sync_skcipher_setkey(tfm, key, 32)
+    Note over Driver: Key copied to sess->session_key<br/>bounce_src & bounce_dst allocated (64 KiB)
+
+    App->>Driver: ioctl(fd, KVAULT_IOCTL_SET_IV, &iv_param)
+    Note over Driver: IV loaded into sess->session_iv
+
+    loop For each 64 KiB chunk
+        App->>Driver: ioctl(fd, KVAULT_IOCTL_TRANSFORM, &param)
+        Note over Driver: copy_from_user(bounce_src)<br/>scatterwalk / crypto_sync_skcipher_encrypt()<br/>copy_to_user(bounce_dst)
+        Driver-->>App: 0 (Success)
+    end
+
+    App->>Driver: ioctl(fd, KVAULT_IOCTL_FLUSH_KEY)
+    Note over Driver: memzero_explicit(sess->session_key, 32)<br/>sess->is_key_set = false
+
+    App->>Dev: close(fd)
+    Dev->>Driver: kvault_release()
+    Note over Driver: memzero_explicit(bounce buffers)<br/>crypto_free_sync_skcipher(tfm)<br/>kfree(sess)
+```
+
+## AtomicFileWriter ACID Crash Consistency
+
+```mermaid
+flowchart TD
+    START["Initiate Write"] --> STAGE["Open Hidden Staging File\nrecords/file.enc.tmp.PID.RANDOM"]
+    STAGE --> WRITE["Stream 64 KiB Chunks\ninto Staging File"]
+    WRITE --> SYNC["Invoke ::fsync(fd)\nFlush Dirty Kernel Pages to Physical Disk"]
+    SYNC --> CLOSE["Close Staging File Descriptor"]
+    CLOSE --> RENAME["Atomic ::renameat2()\nReplace Target Atomically via VFS Inode Swap"]
+    RENAME --> DIRSYNC["Invoke ::fsync(parent_dir_fd)\nPersist Directory Inode Entry to Disk"]
+    DIRSYNC --> COMMIT["Write Committed (ACID Durability)"]
+
+    WRITE -. Failure / Crash .-> ABORT["AtomicFileWriter Destructor Triggers"]
+    ABORT --> UNLINK["Invoke ::unlink(staging_file)\nTarget File Remains Pristine and Untouched"]
+```
