@@ -73,6 +73,18 @@ struct VaultStatus {
 };
 
 /**
+ * @struct BenchmarkMetric
+ * @brief Empirical performance metric for cryptographic operations.
+ */
+struct BenchmarkMetric {
+    std::string operation;
+    std::string detail;
+    double elapsed_ms{0.0};
+    double throughput_mb_s{0.0};
+    std::string backend;
+};
+
+/**
  * @class VaultManager
  * @brief Core orchestrator for secure file storage, encryption, and decryption.
  */
@@ -193,6 +205,13 @@ public:
      * @brief Checks if the kernel acceleration driver /dev/kvault is available.
      */
     [[nodiscard]] bool isKernelDriverLoaded() const;
+
+    /**
+     * @brief Measures real-world throughput and latency across key derivation, cipher, and HMAC engines.
+     * @param streamSizeBytes Total size of payload to stream through the pipeline (default: 16 MiB).
+     * @return Vector of measured benchmark metrics.
+     */
+    [[nodiscard]] std::vector<BenchmarkMetric> runBenchmark(size_t streamSizeBytes = 16 * 1024 * 1024);
 
 private:
     std::filesystem::path m_vaultPath;

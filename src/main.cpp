@@ -159,6 +159,7 @@ void printUsage(const char* prog) {
               << "  " << prog << " list    --vault <path>\n"
               << "  " << prog << " rm      --vault <path> --file <record> [--force]\n"
               << "  " << prog << " verify  --vault <path> [--file <record>] [--all] [--key <pass>]\n"
+              << "  " << prog << " bench   [--size-mb <N>] [--vault <path>]\n"
               << "  " << prog << " status  --vault <path>\n\n"
               << "Commands:\n"
               << "  init           Create and format a new secure vault directory (mode 0700)\n"
@@ -167,6 +168,7 @@ void printUsage(const char* prog) {
               << "  list (ls)      List all vault records with permissions, timestamps, sizes\n"
               << "  rm (delete)    Safely remove a record and its lock under advisory mutex\n"
               << "  verify (check) Cryptographic HMAC verification in-place without disk extraction\n"
+              << "  bench          Run empirical performance micro-benchmark across crypto engines\n"
               << "  status         Inspect vault health, driver accelerator status, and locks\n\n"
               << "Options:\n"
               << "  --in <files...>     One or more input files or wildcards (e.g. *.pdf)\n"
@@ -211,6 +213,7 @@ int main(int argc, char* argv[]) {
     bool operateAll = false;
     bool shredSource = false;
     bool forceDelete = false;
+    size_t benchSizeMb = 16;
     bool verbose = false;
 
     for (int i = 2; i < argc; ++i) {
@@ -244,6 +247,8 @@ int main(int argc, char* argv[]) {
             if (!std::getline(std::cin, key)) {
                 key = "";
             }
+        } else if (arg == "--size-mb" && i + 1 < argc) {
+            benchSizeMb = std::stoul(argv[++i]);
         } else if (arg == "--verbose" || arg == "-v") {
             verbose = true;
         }
@@ -260,7 +265,11 @@ int main(int argc, char* argv[]) {
         kvault::Logger::setMinLevel(kvault::Logger::Level::Debug);
     }
 
-    if (vaultPath.empty()) {
+    if (command == "bench" || command == "benchmark") {
+        if (vaultPath.empty()) {
+            vaultPath = ".";
+        }
+    } else if (vaultPath.empty()) {
         kvault::Logger::error("Missing required parameter: --vault <path>");
         return 1;
     }
@@ -580,6 +589,40 @@ int main(int argc, char* argv[]) {
             }
         }
         std::cout << "\n";
+    } else if (command == "bench" || command == "benchmark") {
+        printBanner();
+        std::cout << "\n\033[1m[*] Running Cryptographic Performance Benchmark ("
+                  << benchSizeMb << " MiB Workload)...\033[0m\n\n";
+
+        auto metrics = vault.runBenchmark(benchSizeMb * 1024 * 1024);
+
+        std::cout << std::left
+                  << std::setw(26) << "Operation"
+                  << std::setw(38) << "Workload / Details"
+                  << std::setw(14) << "Time (ms)"
+                  << std::setw(18) << "Throughput"
+                  << std::setw(30) << "Engine / Backend"
+                  << "\n";
+        std::cout << std::string(126, '=') << "\n";
+
+        for (const auto& m : metrics) {
+            std::cout << std::left
+                      << std::setw(26) << m.operation
+                      << std::setw(38) << m.detail
+                      << std::setw(14) << std::fixed << std::setprecision(2) << m.elapsed_ms;
+
+            if (m.operation.find("PBKDF2") != std::string::npos) {
+                std::string iterStr = std::to_string(static_cast<uint64_t>(m.throughput_mb_s)) + " iter/s";
+                std::cout << std::setw(18) << iterStr;
+            } else {
+                std::ostringstream ss;
+                ss << std::fixed << std::setprecision(2) << m.throughput_mb_s << " MB/s";
+                std::cout << std::setw(18) << ss.str();
+            }
+
+            std::cout << std::setw(30) << m.backend << "\n";
+        }
+        std::cout << std::string(120, '=') << "\n\n";
     } else {
         kvault::Logger::error("Unknown command: " + command);
         printUsage(argv[0]);

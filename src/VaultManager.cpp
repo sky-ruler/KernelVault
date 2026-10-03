@@ -1623,4 +1623,170 @@ bool VaultManager::isKernelDriverLoaded() const {
     return std::filesystem::exists("/dev/kvault");
 }
 
+std::vector<BenchmarkMetric> VaultManager::runBenchmark(size_t streamSizeBytes) {
+    std::vector<BenchmarkMetric> metrics;
+    if (streamSizeBytes == 0) streamSizeBytes = 16 * 1024 * 1024;
+
+    UniqueFd devFd = openKernelDevice();
+    const bool hasKernel = devFd.valid();
+    const std::string cipherBackend = hasKernel ? "/dev/kvault (Kernel)" : "Software (C++20)";
+
+    // 1. PBKDF2 Key Derivation
+    {
+        std::string_view pass = "BenchmarkSecretPassphrase2026!";
+        std::array<uint8_t, 16> salt{};
+        KeyDerivation::generateSalt(salt);
+
+        PinnedMemory<32> encKey;
+        PinnedMemory<32> macKey;
+
+        auto t0 = std::chrono::steady_clock::now();
+        KeyDerivation::deriveDualKeysPbkdf2(pass, salt, encKey.span(), macKey.span(), KeyDerivation::DEFAULT_ITERATIONS);
+        auto t1 = std::chrono::steady_clock::now();
+
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        metrics.push_back({
+            "PBKDF2-HMAC-SHA256",
+            "100,000 rounds (dual 256-bit keys)",
+            ms,
+            (ms > 0.0) ? (100000.0 / (ms / 1000.0)) : 0.0,
+            "User-space (RFC 2898)"
+        });
+    }
+
+    // Setup buffers
+    PinnedMemory<32> encKey;
+    PinnedMemory<32> macKey;
+    for (size_t i = 0; i < 32; ++i) {
+        encKey.span()[i] = static_cast<uint8_t>(i ^ 0x5a);
+        macKey.span()[i] = static_cast<uint8_t>(i ^ 0xa5);
+    }
+    std::array<uint8_t, 16> iv{};
+    for (size_t i = 0; i < 16; ++i) iv[i] = static_cast<uint8_t>(i ^ 0x3c);
+
+    const size_t chunkSize = CHUNK_SIZE;
+    std::vector<uint8_t> chunk(chunkSize, 0x42);
+    std::vector<uint8_t> cipherChunk;
+    const size_t totalChunks = (streamSizeBytes + chunkSize - 1) / chunkSize;
+    const size_t actualTotalBytes = totalChunks * chunkSize;
+
+    // 2. AES-256-CBC Encryption
+    {
+        std::array<uint8_t, 16> runningIv = iv;
+        if (hasKernel) {
+            configureKernelSession(devFd.get(), encKey.span(), runningIv, KVAULT_MODE_ENCRYPT);
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+        for (size_t c = 0; c < totalChunks; ++c) {
+            transformBuffer(devFd.get(), chunk, cipherChunk, encKey.span(), runningIv, true);
+        }
+        auto t1 = std::chrono::steady_clock::now();
+
+        if (hasKernel) flushKernelSession(devFd.get());
+
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        double throughput = (ms > 0.0) ? ((static_cast<double>(actualTotalBytes) / 1000000.0) / (ms / 1000.0)) : 0.0;
+
+        metrics.push_back({
+            "AES-256-CBC Encryption",
+            std::to_string(actualTotalBytes / (1024 * 1024)) + " MiB (" + std::to_string(chunkSize / 1024) + " KiB chunks)",
+            ms,
+            throughput,
+            cipherBackend
+        });
+    }
+
+    // 3. AES-256-CBC Decryption
+    {
+        std::array<uint8_t, 16> runningIv = iv;
+        if (hasKernel) {
+            configureKernelSession(devFd.get(), encKey.span(), runningIv, KVAULT_MODE_DECRYPT);
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+        for (size_t c = 0; c < totalChunks; ++c) {
+            transformBuffer(devFd.get(), cipherChunk, chunk, encKey.span(), runningIv, false);
+        }
+        auto t1 = std::chrono::steady_clock::now();
+
+        if (hasKernel) flushKernelSession(devFd.get());
+
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        double throughput = (ms > 0.0) ? ((static_cast<double>(actualTotalBytes) / 1000000.0) / (ms / 1000.0)) : 0.0;
+
+        metrics.push_back({
+            "AES-256-CBC Decryption",
+            std::to_string(actualTotalBytes / (1024 * 1024)) + " MiB (" + std::to_string(chunkSize / 1024) + " KiB chunks)",
+            ms,
+            throughput,
+            cipherBackend
+        });
+    }
+
+    // 4. Streaming HMAC-SHA256
+    {
+        HmacContext hmacCtx;
+        hmacCtx.init(macKey.span());
+        std::array<uint8_t, 32> tag{};
+
+        auto t0 = std::chrono::steady_clock::now();
+        for (size_t c = 0; c < totalChunks; ++c) {
+            hmacCtx.update(chunk);
+        }
+        hmacCtx.finalize(tag);
+        auto t1 = std::chrono::steady_clock::now();
+
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        double throughput = (ms > 0.0) ? ((static_cast<double>(actualTotalBytes) / 1000000.0) / (ms / 1000.0)) : 0.0;
+
+        metrics.push_back({
+            "HMAC-SHA256 Streaming",
+            std::to_string(actualTotalBytes / (1024 * 1024)) + " MiB continuous digest",
+            ms,
+            throughput,
+            "User-space (Streaming O(1) RAM)"
+        });
+    }
+
+    // 5. Full Pipeline (Enc + MAC)
+    {
+        std::array<uint8_t, 16> runningIv = iv;
+        if (hasKernel) {
+            configureKernelSession(devFd.get(), encKey.span(), runningIv, KVAULT_MODE_ENCRYPT);
+        }
+        HmacContext hmacCtx;
+        hmacCtx.init(macKey.span());
+        std::array<uint8_t, 32> tag{};
+
+        auto t0 = std::chrono::steady_clock::now();
+        for (size_t c = 0; c < totalChunks; ++c) {
+            transformBuffer(devFd.get(), chunk, cipherChunk, encKey.span(), runningIv, true);
+            hmacCtx.update(cipherChunk);
+        }
+        hmacCtx.finalize(tag);
+        auto t1 = std::chrono::steady_clock::now();
+
+        if (hasKernel) flushKernelSession(devFd.get());
+
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        double throughput = (ms > 0.0) ? ((static_cast<double>(actualTotalBytes) / 1000000.0) / (ms / 1000.0)) : 0.0;
+
+        metrics.push_back({
+            "Full Pipeline (Enc + MAC)",
+            std::to_string(actualTotalBytes / (1024 * 1024)) + " MiB streaming pipeline",
+            ms,
+            throughput,
+            cipherBackend + " + HMAC"
+        });
+    }
+
+    // Scrub all local buffers
+    KeyDerivation::secureZero(chunk.data(), chunk.size());
+    KeyDerivation::secureZero(cipherChunk.data(), cipherChunk.size());
+    KeyDerivation::secureZero(iv.data(), iv.size());
+
+    return metrics;
+}
+
 } // namespace kvault

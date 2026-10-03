@@ -450,3 +450,19 @@ TEST_F(VaultIntegrationTest, DirectoryArchivingRoundTrip) {
     EXPECT_EQ(origContent, restContent);
 }
 
+TEST_F(VaultIntegrationTest, MicroBenchmarkExecution) {
+    VaultManager vault(m_vaultDir);
+    ASSERT_TRUE(vault.initializeVault());
+
+    auto metrics = vault.runBenchmark(64 * 1024);
+    ASSERT_EQ(metrics.size(), 5U);
+
+    for (const auto& m : metrics) {
+        EXPECT_FALSE(m.operation.empty());
+        EXPECT_FALSE(m.detail.empty());
+        EXPECT_FALSE(m.backend.empty());
+        EXPECT_GE(m.elapsed_ms, 0.0);
+        EXPECT_GT(m.throughput_mb_s, 0.0);
+    }
+}
+

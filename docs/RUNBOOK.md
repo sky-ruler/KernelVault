@@ -105,8 +105,20 @@ Safely remove records and associated locks under exclusive POSIX advisory mutex:
 ./build/kvault rm --vault "$TEST_DIR/vault" --file sample1.txt --force
 ```
 
+### Empirical Micro-Benchmarking (`kvault bench`)
+Measure latency and streaming throughput across key derivation, cipher transformations, and HMAC-SHA256:
+```bash
+./build/kvault bench --size-mb 16
+```
+
 ## 5. Build and load the Linux driver (optional)
 
+KernelVault includes an automated driver test harness that builds, loads, runs an end-to-end cryptographic test round-trip through `/dev/kvault`, and cleanly unloads:
+```bash
+sudo ./scripts/test_driver.sh
+```
+
+Or perform manual lifecycle operations:
 ```bash
 sudo apt install -y kmod linux-headers-$(uname -r)
 make -C driver
@@ -115,7 +127,13 @@ ls -l /dev/kvault
 sudo dmesg | tail -n 20
 ```
 
-Run CLI commands as an account allowed to open `/dev/kvault`. The node's permissions depend on the host's device-management policy; do not set world-write permissions. When the device cannot be opened, the CLI uses its software cipher fallback.
+To grant non-root desktop access to `/dev/kvault`, install the udev rule:
+```bash
+sudo cp packaging/udev/99-kvault.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+When the device cannot be opened, the CLI seamlessly uses its built-in software cipher fallback.
 
 Unload the module after testing:
 
