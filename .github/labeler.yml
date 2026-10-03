@@ -1,0 +1,57 @@
+# ==============================================================================
+# KernelVault GitHub Actions Pull Request Auto-Labeler Configuration
+# ==============================================================================
+
+"area: driver":
+  - changed-files:
+      - any-glob-to-any-file: "driver/**"
+
+"area: crypto":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "include/KeyDerivation.hpp"
+          - "src/KeyDerivation.cpp"
+          - "include/PinnedMemory.hpp"
+
+"area: storage":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "include/VaultManager.hpp"
+          - "src/VaultManager.cpp"
+          - "include/AtomicFileWriter.hpp"
+          - "src/AtomicFileWriter.cpp"
+          - "include/FileLock.hpp"
+          - "src/FileLock.cpp"
+
+"area: gui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/gui_main.cpp"
+          - "packaging/icons/**"
+          - "packaging/kvault.desktop"
+
+"area: cli":
+  - changed-files:
+      - any-glob-to-any-file: "src/main.cpp"
+
+"area: tests":
+  - changed-files:
+      - any-glob-to-any-file: "tests/**"
+
+"area: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "*.md"
+
+"area: packaging":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "packaging/**"
+          - "Dockerfile"
+          - ".devcontainer/**"
+          - "CMakeLists.txt"
+
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file: ".github/**"

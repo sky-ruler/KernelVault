@@ -1,0 +1,20 @@
+name: Pull Request Triage & Subsystem Labeler
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  triage:
+    name: Auto-Label Subsystems
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply Subsystem Labels
+        uses: actions/labeler@v5
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          sync-labels: true
