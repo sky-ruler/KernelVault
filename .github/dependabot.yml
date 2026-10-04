@@ -1,11 +1,18 @@
 version: 2
 updates:
-  # Maintain GitHub Actions dependencies
+  # Maintain GitHub Actions dependencies (bundled into a single grouped PR)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - "ci"
       - "dependencies"
+    commit-message:
+      prefix: "build(ci)"
+
