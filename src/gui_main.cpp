@@ -128,51 +128,28 @@ public:
      * and status output console.
      */
     MainWindow() {
+        // Set standard desktop application geometry
         setWindowTitle("KernelVault - Secure Linux Storage");
         setMinimumSize(960, 720);
         resize(1120, 780);
         setAcceptDrops(true);
 
-        QSettings settings("KernelVault", "KernelVault");
-        QString lastVault = settings.value("lastVaultPath").toString();
-        if (lastVault.isEmpty() || !QDir(lastVault).exists()) {
-            lastVault = QDir::homePath() + "/kvault-vault";
-        }
+        // Restore persisted vault and destination paths
+        const QString lastVault = restoreVaultDirectory();
+        restoreDestinationDirectory();
 
-        m_destinationDir = settings.value("lastDestinationDir").toString();
-        if (m_destinationDir.isEmpty() || !QDir(m_destinationDir).exists()) {
-            m_destinationDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
-            if (m_destinationDir.isEmpty() || !QDir(m_destinationDir).exists()) {
-                m_destinationDir = QDir::homePath() + "/restored";
-            }
-        }
-
+        // Assemble root layout container
         auto* central = new QWidget(this);
         auto* root = new QVBoxLayout(central);
         root->setContentsMargins(28, 22, 28, 20);
         root->setSpacing(12);
 
-        auto* headingRow = new QHBoxLayout();
-        auto* heading = new QLabel("KernelVault", central);
-        heading->setObjectName("heading");
-        headingRow->addWidget(heading);
-        headingRow->addStretch(1);
-
-        auto* versionBadge = new QLabel("v3.0.1 Enterprise", central);
-        versionBadge->setObjectName("badge");
-        headingRow->addWidget(versionBadge);
-        root->addLayout(headingRow);
-
-        auto* subtitle = new QLabel(
-            "Linux Kernel-Assisted Encrypted Vault with Authenticated Wire Format (AES-256-CBC + HMAC-SHA256).", central);
-        subtitle->setObjectName("muted");
-        subtitle->setWordWrap(true);
-        root->addWidget(subtitle);
-
+        // Header brand section and panels
+        root->addWidget(buildHeaderSection(central));
         root->addWidget(buildVaultPanel(central));
         root->addWidget(buildOperations(central), 1);
 
-        // Progress bar for async operations
+        // Async indeterminate progress bar
         m_progressBar = new QProgressBar(central);
         m_progressBar->setRange(0, 0);
         m_progressBar->setFixedHeight(4);
@@ -180,58 +157,15 @@ public:
         m_progressBar->setVisible(false);
         root->addWidget(m_progressBar);
 
+        // Status message console
         m_resultLabel = new QLabel("Choose a vault directory to begin.", central);
         m_resultLabel->setObjectName("result");
         m_resultLabel->setWordWrap(true);
         root->addWidget(m_resultLabel);
+
         setCentralWidget(central);
-
-        setStyleSheet(R"(
-            QMainWindow, QWidget { background: #0f172a; color: #f8fafc; font-size: 13px; font-family: 'Segoe UI', Inter, sans-serif; }
-            QLabel#heading { font-size: 26px; font-weight: 700; color: #38bdf8; }
-            QLabel#muted { color: #94a3b8; }
-            QLabel#badge { background: #0284c7; color: #ffffff; font-weight: 700; font-size: 11px; padding: 4px 10px; border-radius: 12px; }
-            QGroupBox { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
-                        margin-top: 8px; padding: 12px; font-weight: 600; color: #e2e8f0; }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; color: #38bdf8; }
-            QLineEdit, QComboBox { background: #0f172a; border: 1px solid #475569; color: #f8fafc;
-                                  border-radius: 6px; padding: 7px 10px; min-height: 22px; }
-            QLineEdit:focus, QComboBox:focus { border: 1px solid #38bdf8; }
-            QLineEdit:disabled, QComboBox:disabled { background: #1e293b; color: #64748b; border-color: #334155; }
-            QPushButton { background: #334155; border: 1px solid #475569; border-radius: 6px; color: #f8fafc;
-                          padding: 8px 14px; font-weight: 600; min-height: 20px; }
-            QPushButton:hover { background: #475569; }
-            QPushButton:disabled { color: #64748b; background: #1e293b; border-color: #334155; }
-            QPushButton#primary { color: #ffffff; background: #0284c7; border-color: #0284c7; }
-            QPushButton#primary:hover { background: #0369a1; }
-            QPushButton#danger { color: #ffffff; background: #dc2626; border-color: #dc2626; }
-            QPushButton#danger:hover { background: #b91c1c; }
-            QPushButton#toggleEye { background: #1e293b; border: 1px solid #475569; padding: 4px 8px; }
-            QTabWidget::pane { background: #1e293b; border: 1px solid #334155;
-                               border-radius: 8px; top: -1px; }
-            QTabBar::tab { background: #0f172a; color: #94a3b8; padding: 9px 18px; margin-right: 4px;
-                           border-top-left-radius: 6px; border-top-right-radius: 6px; border: 1px solid #334155; }
-            QTabBar::tab:selected { color: #38bdf8; background: #1e293b; font-weight: 700; border-bottom: none; }
-            QTableWidget { background: #0f172a; border: 1px solid #334155; border-radius: 6px; gridline-color: #1e293b; color: #f8fafc; }
-            QHeaderView::section { background: #1e293b; color: #94a3b8; font-weight: 700; border: 1px solid #334155; padding: 6px; }
-            QProgressBar { background: #1e293b; border-radius: 2px; border: none; }
-            QProgressBar::chunk { background: #38bdf8; border-radius: 2px; }
-            QLabel#statusReady { color: #34d399; font-weight: 700; }
-            QLabel#statusWarning { color: #fbbf24; font-weight: 700; }
-            QLabel#result { padding: 4px 2px; color: #38bdf8; font-weight: 500; font-size: 13px; }
-            QCheckBox { color: #e2e8f0; font-weight: 500; spacing: 8px; }
-            QMenu { background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; padding: 4px; }
-            QMenu::item { padding: 6px 18px; border-radius: 4px; }
-            QMenu::item:selected { background: #0284c7; color: #ffffff; }
-        )");
-
-        m_vaultPath->setText(lastVault);
-        connect(m_vaultPath, &QLineEdit::editingFinished, this, [this] {
-            QSettings s("KernelVault", "KernelVault");
-            s.setValue("lastVaultPath", m_vaultPath->text());
-            refreshVaultState();
-        });
-        refreshVaultState();
+        applyDarkTheme();
+        wireVaultPathSignals(lastVault);
     }
 
     ~MainWindow() override {
@@ -317,6 +251,122 @@ private:
     QThread* m_worker{};
     bool m_vaultInitialized{false};
 
+    /**
+     * @brief Restores previously saved vault directory from user preferences.
+     * @return QString Absolute path to the vault folder.
+     */
+    QString restoreVaultDirectory() {
+        QSettings settings("KernelVault", "KernelVault");
+        QString lastVault = settings.value("lastVaultPath").toString();
+        if (lastVault.isEmpty() || !QDir(lastVault).exists()) {
+            lastVault = QDir::homePath() + "/kvault-vault";
+        }
+        return lastVault;
+    }
+
+    /**
+     * @brief Restores previously saved destination directory from user preferences.
+     */
+    void restoreDestinationDirectory() {
+        QSettings settings("KernelVault", "KernelVault");
+        m_destinationDir = settings.value("lastDestinationDir").toString();
+        if (m_destinationDir.isEmpty() || !QDir(m_destinationDir).exists()) {
+            m_destinationDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+            if (m_destinationDir.isEmpty() || !QDir(m_destinationDir).exists()) {
+                m_destinationDir = QDir::homePath() + "/restored";
+            }
+        }
+    }
+
+    /**
+     * @brief Constructs the application top branding header with version badge.
+     * @param parent Parent widget.
+     * @return QWidget* Configured header widget.
+     */
+    QWidget* buildHeaderSection(QWidget* parent) {
+        auto* headerWidget = new QWidget(parent);
+        auto* layout = new QVBoxLayout(headerWidget);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(4);
+
+        auto* headingRow = new QHBoxLayout();
+        auto* heading = new QLabel("KernelVault", headerWidget);
+        heading->setObjectName("heading");
+        headingRow->addWidget(heading);
+        headingRow->addStretch(1);
+
+        auto* versionBadge = new QLabel("v3.0.1 Enterprise", headerWidget);
+        versionBadge->setObjectName("badge");
+        headingRow->addWidget(versionBadge);
+        layout->addLayout(headingRow);
+
+        auto* subtitle = new QLabel(
+            "Linux Kernel-Assisted Encrypted Vault with Authenticated Wire Format (AES-256-CBC + HMAC-SHA256).", headerWidget);
+        subtitle->setObjectName("muted");
+        subtitle->setWordWrap(true);
+        layout->addWidget(subtitle);
+
+        return headerWidget;
+    }
+
+    /**
+     * @brief Applies application-wide dark enterprise QSS theme palette.
+     */
+    void applyDarkTheme() {
+        setStyleSheet(R"(
+            QMainWindow, QWidget { background: #0f172a; color: #f8fafc; font-size: 13px; font-family: 'Segoe UI', Inter, sans-serif; }
+            QLabel#heading { font-size: 26px; font-weight: 700; color: #38bdf8; }
+            QLabel#muted { color: #94a3b8; }
+            QLabel#badge { background: #0284c7; color: #ffffff; font-weight: 700; font-size: 11px; padding: 4px 10px; border-radius: 12px; }
+            QGroupBox { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+                        margin-top: 8px; padding: 12px; font-weight: 600; color: #e2e8f0; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; color: #38bdf8; }
+            QLineEdit, QComboBox { background: #0f172a; border: 1px solid #475569; color: #f8fafc;
+                                  border-radius: 6px; padding: 7px 10px; min-height: 22px; }
+            QLineEdit:focus, QComboBox:focus { border: 1px solid #38bdf8; }
+            QLineEdit:disabled, QComboBox:disabled { background: #1e293b; color: #64748b; border-color: #334155; }
+            QPushButton { background: #334155; border: 1px solid #475569; border-radius: 6px; color: #f8fafc;
+                          padding: 8px 14px; font-weight: 600; min-height: 20px; }
+            QPushButton:hover { background: #475569; }
+            QPushButton:disabled { color: #64748b; background: #1e293b; border-color: #334155; }
+            QPushButton#primary { color: #ffffff; background: #0284c7; border-color: #0284c7; }
+            QPushButton#primary:hover { background: #0369a1; }
+            QPushButton#danger { color: #ffffff; background: #dc2626; border-color: #dc2626; }
+            QPushButton#danger:hover { background: #b91c1c; }
+            QPushButton#toggleEye { background: #1e293b; border: 1px solid #475569; padding: 4px 8px; }
+            QTabWidget::pane { background: #1e293b; border: 1px solid #334155;
+                               border-radius: 8px; top: -1px; }
+            QTabBar::tab { background: #0f172a; color: #94a3b8; padding: 9px 18px; margin-right: 4px;
+                           border-top-left-radius: 6px; border-top-right-radius: 6px; border: 1px solid #334155; }
+            QTabBar::tab:selected { color: #38bdf8; background: #1e293b; font-weight: 700; border-bottom: none; }
+            QTableWidget { background: #0f172a; border: 1px solid #334155; border-radius: 6px; gridline-color: #1e293b; color: #f8fafc; }
+            QHeaderView::section { background: #1e293b; color: #94a3b8; font-weight: 700; border: 1px solid #334155; padding: 6px; }
+            QProgressBar { background: #1e293b; border-radius: 2px; border: none; }
+            QProgressBar::chunk { background: #38bdf8; border-radius: 2px; }
+            QLabel#statusReady { color: #34d399; font-weight: 700; }
+            QLabel#statusWarning { color: #fbbf24; font-weight: 700; }
+            QLabel#result { padding: 4px 2px; color: #38bdf8; font-weight: 500; font-size: 13px; }
+            QCheckBox { color: #e2e8f0; font-weight: 500; spacing: 8px; }
+            QMenu { background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; padding: 4px; }
+            QMenu::item { padding: 6px 18px; border-radius: 4px; }
+            QMenu::item:selected { background: #0284c7; color: #ffffff; }
+        )");
+    }
+
+    /**
+     * @brief Connects signals for vault path updates and refreshes initial status.
+     * @param initialPath Initial path loaded from settings.
+     */
+    void wireVaultPathSignals(const QString& initialPath) {
+        m_vaultPath->setText(initialPath);
+        connect(m_vaultPath, &QLineEdit::editingFinished, this, [this] {
+            QSettings s("KernelVault", "KernelVault");
+            s.setValue("lastVaultPath", m_vaultPath->text());
+            refreshVaultState();
+        });
+        refreshVaultState();
+    }
+
     static QPushButton* createPasswordToggle(QLineEdit* lineEdit, QWidget* parent) {
         auto* btn = new QPushButton("👁 Show", parent);
         btn->setObjectName("toggleEye");
@@ -373,22 +423,12 @@ private:
     }
 
     /**
-     * @brief Constructs the encryption tab interface for securing files and directory archives.
-     *
-     * @param parent Parent widget container hosting the tab page.
-     * @return QWidget* Fully configured widget containing file pickers, directory selectors,
-     *                  source shredding toggles, passphrase inputs with show/hide eye toggles,
-     *                  real-time confirmation match badge, and encryption trigger buttons.
+     * @brief Builds the plaintext file/folder selector controls for the encrypt tab.
+     * @param parent Container widget.
+     * @return QWidget* Source row widget.
      */
-    QWidget* buildEncryptTab(QWidget* parent) {
-        auto* page = new QWidget(parent);
-        auto* layout = new QVBoxLayout(page);
-        layout->setContentsMargins(18, 16, 18, 16);
-        layout->setSpacing(12);
-
-        auto* form = new QFormLayout();
-
-        auto* fileRow = new QWidget(page);
+    QWidget* buildEncryptSourceRow(QWidget* parent) {
+        auto* fileRow = new QWidget(parent);
         auto* fileLayout = new QHBoxLayout(fileRow);
         fileLayout->setContentsMargins(0, 0, 0, 0);
         m_encryptInput = new QLineEdit(fileRow);
@@ -420,10 +460,17 @@ private:
         fileLayout->addWidget(m_encryptInput, 1);
         fileLayout->addWidget(chooseFiles);
         fileLayout->addWidget(chooseFolder);
-        form->addRow("Plaintext Source", fileRow);
+        return fileRow;
+    }
 
+    /**
+     * @brief Builds passphrase entry, confirmation match, and shredding checkboxes.
+     * @param parent Container widget.
+     * @param form Form layout receiving the rows.
+     */
+    void buildEncryptPassphraseRows(QWidget* parent, QFormLayout* form) {
         // Passphrase row with show/hide toggle
-        auto* passRow = new QWidget(page);
+        auto* passRow = new QWidget(parent);
         auto* passLayout = new QHBoxLayout(passRow);
         passLayout->setContentsMargins(0, 0, 0, 0);
         m_encryptPassword = new QLineEdit(passRow);
@@ -435,7 +482,7 @@ private:
         form->addRow("Master Passphrase", passRow);
 
         // Confirm Passphrase row
-        auto* confirmRow = new QWidget(page);
+        auto* confirmRow = new QWidget(parent);
         auto* confirmLayout = new QHBoxLayout(confirmRow);
         confirmLayout->setContentsMargins(0, 0, 0, 0);
         m_encryptConfirmPassword = new QLineEdit(confirmRow);
@@ -446,7 +493,7 @@ private:
         confirmLayout->addWidget(toggle2);
         form->addRow("Confirm Passphrase", confirmRow);
 
-        m_passMatchLabel = new QLabel(page);
+        m_passMatchLabel = new QLabel(parent);
         form->addRow("", m_passMatchLabel);
 
         auto updateMatch = [this] {
@@ -465,9 +512,27 @@ private:
         connect(m_encryptPassword, &QLineEdit::textChanged, this, updateMatch);
         connect(m_encryptConfirmPassword, &QLineEdit::textChanged, this, updateMatch);
 
-        m_shredCheckbox = new QCheckBox("Anti-Forensics: Shred source file(s) with CSPRNG entropy after encryption (--shred)", page);
+        m_shredCheckbox = new QCheckBox("Anti-Forensics: Shred source file(s) with CSPRNG entropy after encryption (--shred)", parent);
         form->addRow("", m_shredCheckbox);
+    }
 
+    /**
+     * @brief Constructs the encryption tab interface for securing files and directory archives.
+     *
+     * @param parent Parent widget container hosting the tab page.
+     * @return QWidget* Fully configured widget containing file pickers, directory selectors,
+     *                  source shredding toggles, passphrase inputs with show/hide eye toggles,
+     *                  real-time confirmation match badge, and encryption trigger buttons.
+     */
+    QWidget* buildEncryptTab(QWidget* parent) {
+        auto* page = new QWidget(parent);
+        auto* layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 16, 18, 16);
+        layout->setSpacing(12);
+
+        auto* form = new QFormLayout();
+        form->addRow("Plaintext Source", buildEncryptSourceRow(page));
+        buildEncryptPassphraseRows(page, form);
         layout->addLayout(form);
 
         auto* note = new QLabel(
@@ -486,28 +551,12 @@ private:
     }
 
     /**
-     * @brief Constructs the decryption tab interface with auto-updating destination paths and collision safety.
-     *
-     * @param parent Parent widget container hosting the tab page.
-     * @return QWidget* Fully configured widget containing record dropdown, destination pickers,
-     *                  collision detection warning banners, inline auto-rename buttons, overwrite toggles,
-     *                  passphrase input, and decryption execution buttons.
+     * @brief Builds the destination path selector row for record decryption.
+     * @param parent Container widget.
+     * @return QWidget* Configured destination row.
      */
-    QWidget* buildDecryptTab(QWidget* parent) {
-        auto* page = new QWidget(parent);
-        auto* layout = new QVBoxLayout(page);
-        layout->setContentsMargins(18, 16, 18, 16);
-        layout->setSpacing(12);
-
-        auto* form = new QFormLayout();
-        m_decryptRecord = new QComboBox(page);
-        connect(m_decryptRecord, &QComboBox::currentIndexChanged, this, [this](int) {
-            updateDecryptTargetPath();
-        });
-        form->addRow("Protected Record", m_decryptRecord);
-
-        // Destination Path Row with Folder Browser and Save As
-        auto* outputRow = new QWidget(page);
+    QWidget* buildDecryptDestinationRow(QWidget* parent) {
+        auto* outputRow = new QWidget(parent);
         auto* outputLayout = new QHBoxLayout(outputRow);
         outputLayout->setContentsMargins(0, 0, 0, 0);
         m_decryptOutput = new QLineEdit(outputRow);
@@ -548,10 +597,16 @@ private:
         outputLayout->addWidget(m_decryptOutput, 1);
         outputLayout->addWidget(chooseFolderBtn);
         outputLayout->addWidget(saveAsBtn);
-        form->addRow("Restoration Target", outputRow);
+        return outputRow;
+    }
 
-        // Collision safety status line
-        auto* collisionRow = new QWidget(page);
+    /**
+     * @brief Builds collision warning banner and auto-rename button for decryption.
+     * @param parent Container widget.
+     * @return QWidget* Configured collision row.
+     */
+    QWidget* buildDecryptCollisionRow(QWidget* parent) {
+        auto* collisionRow = new QWidget(parent);
         auto* collisionLayout = new QHBoxLayout(collisionRow);
         collisionLayout->setContentsMargins(0, 0, 0, 0);
         m_collisionWarningLabel = new QLabel(collisionRow);
@@ -565,16 +620,16 @@ private:
         collisionLayout->addWidget(m_collisionWarningLabel);
         collisionLayout->addWidget(m_autoRenameBtn);
         collisionLayout->addStretch(1);
-        form->addRow("", collisionRow);
+        return collisionRow;
+    }
 
-        m_decryptOverwriteCheckbox = new QCheckBox("Allow overwriting existing files / folders at destination", page);
-        connect(m_decryptOverwriteCheckbox, &QCheckBox::toggled, this, [this](bool) {
-            updateCollisionWarning();
-        });
-        form->addRow("", m_decryptOverwriteCheckbox);
-
-        // Decrypt Passphrase row
-        auto* decPassRow = new QWidget(page);
+    /**
+     * @brief Builds passphrase entry field with toggle button for decryption.
+     * @param parent Container widget.
+     * @return QWidget* Passphrase row widget.
+     */
+    QWidget* buildDecryptPassphraseRow(QWidget* parent) {
+        auto* decPassRow = new QWidget(parent);
         auto* decPassLayout = new QHBoxLayout(decPassRow);
         decPassLayout->setContentsMargins(0, 0, 0, 0);
         m_decryptPassword = new QLineEdit(decPassRow);
@@ -583,8 +638,58 @@ private:
         auto* toggleDec = createPasswordToggle(m_decryptPassword, decPassRow);
         decPassLayout->addWidget(m_decryptPassword, 1);
         decPassLayout->addWidget(toggleDec);
-        form->addRow("Master Passphrase", decPassRow);
+        return decPassRow;
+    }
 
+    /**
+     * @brief Builds action trigger buttons for record decryption.
+     * @param parent Container widget.
+     * @return QHBoxLayout* Layout with action buttons.
+     */
+    QHBoxLayout* buildDecryptActionButtons(QWidget* parent) {
+        auto* btnRow = new QHBoxLayout();
+        m_decryptButton = new QPushButton("Verify HMAC and Restore Record", parent);
+        m_decryptButton->setObjectName("primary");
+        connect(m_decryptButton, &QPushButton::clicked, this, [this] { decryptSelectedRecord(); });
+
+        auto* decryptAllBtn = new QPushButton("Restore All to Folder...", parent);
+        connect(decryptAllBtn, &QPushButton::clicked, this, [this] { decryptAllRecordsToFolder(); });
+
+        btnRow->addWidget(m_decryptButton);
+        btnRow->addWidget(decryptAllBtn);
+        btnRow->addStretch(1);
+        return btnRow;
+    }
+
+    /**
+     * @brief Constructs the decryption tab interface with auto-updating destination paths and collision safety.
+     *
+     * @param parent Parent widget container hosting the tab page.
+     * @return QWidget* Fully configured widget containing record dropdown, destination pickers,
+     *                  collision detection warning banners, inline auto-rename buttons, overwrite toggles,
+     *                  passphrase input, and decryption execution buttons.
+     */
+    QWidget* buildDecryptTab(QWidget* parent) {
+        auto* page = new QWidget(parent);
+        auto* layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 16, 18, 16);
+        layout->setSpacing(12);
+
+        auto* form = new QFormLayout();
+        m_decryptRecord = new QComboBox(page);
+        connect(m_decryptRecord, &QComboBox::currentIndexChanged, this, [this](int) {
+            updateDecryptTargetPath();
+        });
+        form->addRow("Protected Record", m_decryptRecord);
+        form->addRow("Restoration Target", buildDecryptDestinationRow(page));
+        form->addRow("", buildDecryptCollisionRow(page));
+
+        m_decryptOverwriteCheckbox = new QCheckBox("Allow overwriting existing files / folders at destination", page);
+        connect(m_decryptOverwriteCheckbox, &QCheckBox::toggled, this, [this](bool) {
+            updateCollisionWarning();
+        });
+        form->addRow("", m_decryptOverwriteCheckbox);
+        form->addRow("Master Passphrase", buildDecryptPassphraseRow(page));
         layout->addLayout(form);
 
         auto* note = new QLabel(
@@ -594,40 +699,21 @@ private:
         note->setWordWrap(true);
         layout->addWidget(note);
 
-        auto* btnRow = new QHBoxLayout();
-        m_decryptButton = new QPushButton("Verify HMAC and Restore Record", page);
-        m_decryptButton->setObjectName("primary");
-        connect(m_decryptButton, &QPushButton::clicked, this, [this] { decryptSelectedRecord(); });
-
-        auto* decryptAllBtn = new QPushButton("Restore All to Folder...", page);
-        connect(decryptAllBtn, &QPushButton::clicked, this, [this] { decryptAllRecordsToFolder(); });
-
-        btnRow->addWidget(m_decryptButton);
-        btnRow->addWidget(decryptAllBtn);
-        btnRow->addStretch(1);
-        layout->addLayout(btnRow);
+        layout->addLayout(buildDecryptActionButtons(page));
         layout->addStretch(1);
         return page;
     }
 
     /**
-     * @brief Constructs the vault inventory management and cryptographic audit interface.
-     *
-     * @param parent Parent widget container hosting the tab page.
-     * @return QWidget* Fully configured widget hosting the real-time record filter bar,
-     *                  tabular inventory view, contextual right-click actions, and audit controls.
+     * @brief Builds the live search and filter row for inventory records.
+     * @param parent Container widget.
+     * @return QHBoxLayout* Search row layout.
      */
-    QWidget* buildInventoryTab(QWidget* parent) {
-        auto* page = new QWidget(parent);
-        auto* layout = new QVBoxLayout(page);
-        layout->setContentsMargins(18, 16, 18, 16);
-        layout->setSpacing(10);
-
-        // Real-time Search / Filter bar
+    QHBoxLayout* buildInventorySearchRow(QWidget* parent) {
         auto* searchRow = new QHBoxLayout();
-        auto* searchLabel = new QLabel("Filter Records:", page);
+        auto* searchLabel = new QLabel("Filter Records:", parent);
         searchLabel->setObjectName("muted");
-        m_inventorySearch = new QLineEdit(page);
+        m_inventorySearch = new QLineEdit(parent);
         m_inventorySearch->setPlaceholderText("Search by record name, extension, date, or status...");
         m_inventorySearch->setClearButtonEnabled(true);
         connect(m_inventorySearch, &QLineEdit::textChanged, this, [this](const QString& text) {
@@ -648,9 +734,15 @@ private:
         });
         searchRow->addWidget(searchLabel);
         searchRow->addWidget(m_inventorySearch, 1);
-        layout->addLayout(searchRow);
+        return searchRow;
+    }
 
-        m_inventoryTable = new QTableWidget(page);
+    /**
+     * @brief Configures table columns, resize behavior, selection policies, and context menu.
+     * @param parent Container widget.
+     */
+    void setupInventoryTableWidget(QWidget* parent) {
+        m_inventoryTable = new QTableWidget(parent);
         m_inventoryTable->setColumnCount(7);
         m_inventoryTable->setHorizontalHeaderLabels({
             "Record Name", "Version", "Plaintext Size", "Vault Size", "POSIX Mode", "Last Modified", "Status"
@@ -699,11 +791,16 @@ private:
 
             menu.exec(m_inventoryTable->viewport()->mapToGlobal(pos));
         });
+    }
 
-        layout->addWidget(m_inventoryTable, 1);
-
+    /**
+     * @brief Builds action button layout for inventory table operations.
+     * @param parent Container widget.
+     * @return QHBoxLayout* Configured buttons row.
+     */
+    QHBoxLayout* buildInventoryActionButtons(QWidget* parent) {
         auto* btnRow = new QHBoxLayout();
-        m_decryptFromTableButton = new QPushButton("Restore Selected Record...", page);
+        m_decryptFromTableButton = new QPushButton("Restore Selected Record...", parent);
         m_decryptFromTableButton->setObjectName("primary");
         connect(m_decryptFromTableButton, &QPushButton::clicked, this, [this] {
             int row = m_inventoryTable->currentRow();
@@ -714,17 +811,17 @@ private:
             }
         });
 
-        m_verifyButton = new QPushButton("Audit Selected HMAC", page);
+        m_verifyButton = new QPushButton("Audit Selected HMAC", parent);
         connect(m_verifyButton, &QPushButton::clicked, this, [this] { verifySelectedRecord(); });
 
-        m_auditAllButton = new QPushButton("Audit All Records", page);
+        m_auditAllButton = new QPushButton("Audit All Records", parent);
         connect(m_auditAllButton, &QPushButton::clicked, this, [this] { auditAllRecords(); });
 
-        m_deleteButton = new QPushButton("Delete Record", page);
+        m_deleteButton = new QPushButton("Delete Record", parent);
         m_deleteButton->setObjectName("danger");
         connect(m_deleteButton, &QPushButton::clicked, this, [this] { deleteSelectedRecord(); });
 
-        m_refreshButton = new QPushButton("Refresh Table", page);
+        m_refreshButton = new QPushButton("Refresh Table", parent);
         connect(m_refreshButton, &QPushButton::clicked, this, [this] { refreshVaultState(); });
 
         btnRow->addWidget(m_decryptFromTableButton);
@@ -733,7 +830,26 @@ private:
         btnRow->addWidget(m_deleteButton);
         btnRow->addStretch(1);
         btnRow->addWidget(m_refreshButton);
-        layout->addLayout(btnRow);
+        return btnRow;
+    }
+
+    /**
+     * @brief Constructs the vault inventory management and cryptographic audit interface.
+     *
+     * @param parent Parent widget container hosting the tab page.
+     * @return QWidget* Fully configured widget hosting the real-time record filter bar,
+     *                  tabular inventory view, contextual right-click actions, and audit controls.
+     */
+    QWidget* buildInventoryTab(QWidget* parent) {
+        auto* page = new QWidget(parent);
+        auto* layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 16, 18, 16);
+        layout->setSpacing(10);
+
+        layout->addLayout(buildInventorySearchRow(page));
+        setupInventoryTableWidget(page);
+        layout->addWidget(m_inventoryTable, 1);
+        layout->addLayout(buildInventoryActionButtons(page));
 
         return page;
     }

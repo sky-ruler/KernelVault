@@ -185,6 +185,537 @@ void printUsage(const char* prog) {
               << "  --help, -h          Display this help dialog\n";
 }
 
+/**
+ * @brief Configuration parameters collected from command-line arguments.
+ */
+struct CliOptions {
+    std::string vaultPath;
+    std::vector<std::string> inputFiles;
+    std::string inputDir;
+    std::vector<std::string> fileRecords;
+    std::string outputFile;
+    std::string outputDir;
+    std::string key;
+    bool operateAll = false;
+    bool shredSource = false;
+    bool forceDelete = false;
+    size_t benchSizeMb = 16;
+    bool verbose = false;
+};
+
+/**
+ * @brief Parses command-line tokens into structured options and command name.
+ *
+ * @param argc Count of command-line arguments.
+ * @param argv Array of argument strings.
+ * @param command Output command verb.
+ * @param opts Output options structure.
+ * @return true if arguments were valid, false if parsing failed or help requested.
+ */
+static bool parseCommandLineArgs(int argc, char* argv[], std::string& command, CliOptions& opts) {
+    if (argc < 2) {
+        printBanner();
+        printUsage(argv[0]);
+        return false;
+    }
+
+    command = argv[1];
+    if (command == "--help" || command == "-h") {
+        printBanner();
+        printUsage(argv[0]);
+        return false;
+    }
+
+    int i = 2;
+    while (i < argc) {
+        std::string_view arg = argv[i];
+        if (arg == "--vault" && i + 1 < argc) {
+            opts.vaultPath = argv[++i];
+        } else if (arg == "--in") {
+            while (i + 1 < argc && argv[i + 1][0] != '-') {
+                opts.inputFiles.emplace_back(argv[++i]);
+            }
+        } else if (arg == "--dir" && i + 1 < argc) {
+            opts.inputDir = argv[++i];
+        } else if (arg == "--file") {
+            while (i + 1 < argc && argv[i + 1][0] != '-') {
+                opts.fileRecords.emplace_back(argv[++i]);
+            }
+        } else if (arg == "--out" && i + 1 < argc) {
+            opts.outputFile = argv[++i];
+        } else if (arg == "--out-dir" && i + 1 < argc) {
+            opts.outputDir = argv[++i];
+        } else if (arg == "--all") {
+            opts.operateAll = true;
+        } else if (arg == "--shred" || arg == "--wipe") {
+            opts.shredSource = true;
+        } else if (arg == "--force" || arg == "-f") {
+            opts.forceDelete = true;
+        } else if (arg == "--key" && i + 1 < argc) {
+            opts.key = argv[++i];
+            std::memset(argv[i], 'x', std::strlen(argv[i]));
+        } else if (arg == "--key-stdin") {
+            if (!std::getline(std::cin, opts.key)) {
+                opts.key = "";
+            }
+        } else if (arg == "--size-mb" && i + 1 < argc) {
+            opts.benchSizeMb = std::stoul(argv[++i]);
+        } else if (arg == "--verbose" || arg == "-v") {
+            opts.verbose = true;
+        }
+        ++i;
+    }
+
+    if (opts.key.empty()) {
+        const char* envKey = std::getenv("KVAULT_KEY");
+        if (envKey && std::strlen(envKey) > 0) {
+            opts.key = envKey;
+        }
+    }
+
+    if (opts.verbose) {
+        kvault::Logger::setMinLevel(kvault::Logger::Level::Debug);
+    }
+
+    return true;
+}
+
+/**
+ * @brief Executes the vault initialization command.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @return int Exit code (0 for success, 1 for failure).
+ */
+static int executeInit(kvault::VaultManager& vault) {
+    printBanner();
+    return vault.initializeVault() ? 0 : 1;
+}
+
+/**
+ * @brief Executes file and directory encryption operations.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @param opts Options containing input file paths, directory targets, and passphrase.
+ * @return int Exit code (0 for success, non-zero on error).
+ */
+static int executeEncrypt(kvault::VaultManager& vault, CliOptions& opts) {
+    printBanner();
+
+    if (opts.inputFiles.empty() && opts.inputDir.empty()) {
+        kvault::Logger::error("Missing input: Specify --in <file...> or --dir <folder>");
+        return 1;
+    }
+
+    // Prompt for passphrase if not supplied via CLI or environment
+    if (opts.key.empty()) {
+        opts.key = promptPassphraseMasked("Enter vault passphrase: ");
+        if (opts.key.empty()) {
+            kvault::Logger::error("Passphrase cannot be empty");
+            return 1;
+        }
+        std::string confirm = promptPassphraseMasked("Confirm vault passphrase: ");
+        if (opts.key != confirm) {
+            kvault::Logger::error("Passphrase confirmation mismatch. Encryption aborted.");
+            kvault::KeyDerivation::secureZero(opts.key.data(), opts.key.size());
+            kvault::KeyDerivation::secureZero(confirm.data(), confirm.size());
+            return 1;
+        }
+        kvault::KeyDerivation::secureZero(confirm.data(), confirm.size());
+    }
+
+    int exitCode = 0;
+
+    // Encrypt recursive directory tree if specified
+    if (!opts.inputDir.empty()) {
+        std::cout << "[*] Encrypting directory hierarchy: " << opts.inputDir << "\n";
+        if (!vault.encryptDirectory(opts.inputDir, opts.key)) {
+            exitCode = 1;
+        }
+    }
+
+    // Encrypt individual files / wildcards
+    if (!opts.inputFiles.empty()) {
+        std::vector<std::string> expandedFiles = expandWildcards(opts.inputFiles);
+        if (expandedFiles.empty()) {
+            kvault::Logger::error("No files matched input specification");
+            return 1;
+        }
+
+        size_t successCount = 0;
+        size_t failCount = 0;
+
+        for (const auto& f : expandedFiles) {
+            if (g_interrupted.load()) {
+                kvault::Logger::warn("Operation interrupted by user signal.");
+                return 130;
+            }
+
+            std::error_code ec;
+            if (std::filesystem::is_directory(f, ec)) {
+                std::cout << "[*] Encrypting directory: " << f << "\n";
+                if (vault.encryptDirectory(f, opts.key)) {
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+            } else {
+                std::cout << "[*] Encrypting file: " << f << "\n";
+                if (vault.encryptFile(f, opts.key)) {
+                    successCount++;
+                    if (opts.shredSource) {
+                        std::cout << "    [+] Securely shredding source file: " << f << "\n";
+                        kvault::VaultManager::shredFile(f);
+                    }
+                } else {
+                    failCount++;
+                }
+            }
+        }
+
+        std::cout << "\nBatch Encryption Complete: " << successCount << " succeeded, "
+                  << failCount << " failed.\n";
+        if (failCount > 0) exitCode = 1;
+    }
+
+    return exitCode;
+}
+
+/**
+ * @brief Resolves target record names for decryption based on filters and wildcards.
+ *
+ * @param vault VaultManager reference to query vault records.
+ * @param opts User CLI options.
+ * @param targets Output list of matched record names.
+ * @return true if valid targets were found, false otherwise.
+ */
+static bool resolveDecryptTargets(kvault::VaultManager& vault, const CliOptions& opts, std::vector<std::string>& targets) {
+    if (opts.operateAll) {
+        auto records = vault.listRecords();
+        for (const auto& r : records) {
+            targets.push_back(r.filename);
+        }
+        if (targets.empty()) {
+            kvault::Logger::warn("No records found in vault to decrypt.");
+            return false;
+        }
+    } else if (!opts.fileRecords.empty()) {
+        auto records = vault.listRecords();
+        for (const auto& pat : opts.fileRecords) {
+            if (pat.find('*') != std::string::npos || pat.find('?') != std::string::npos) {
+                for (const auto& r : records) {
+                    if (fnmatch(pat.c_str(), r.filename.c_str(), 0) == 0) {
+                        targets.push_back(r.filename);
+                    }
+                }
+            } else {
+                targets.push_back(pat);
+            }
+        }
+    } else {
+        kvault::Logger::error("Missing decrypt target: specify --file <record...> or --all");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Executes record decryption and directory restoration operations.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @param opts Options containing record names, destination paths, and passphrase.
+ * @return int Exit code (0 for success, non-zero on error).
+ */
+static int executeDecrypt(kvault::VaultManager& vault, CliOptions& opts) {
+    printBanner();
+
+    std::vector<std::string> targets;
+    if (!resolveDecryptTargets(vault, opts, targets)) {
+        return opts.operateAll ? 0 : 1;
+    }
+
+    // Validate destination parameters
+    if (targets.size() > 1 || !opts.outputDir.empty() || opts.operateAll) {
+        if (opts.outputDir.empty() && !opts.outputFile.empty()) {
+            opts.outputDir = opts.outputFile;
+        }
+        if (opts.outputDir.empty()) {
+            kvault::Logger::error("Batch decryption requires destination directory: --out-dir <folder>");
+            return 1;
+        }
+    } else if (opts.outputFile.empty()) {
+        kvault::Logger::error("Missing required parameter: --out <destination> or --out-dir <folder>");
+        return 1;
+    }
+
+    // Prompt for passphrase if needed
+    if (opts.key.empty()) {
+        opts.key = promptPassphraseMasked("Enter vault passphrase: ");
+        if (opts.key.empty()) {
+            kvault::Logger::error("Passphrase cannot be empty");
+            return 1;
+        }
+    }
+
+    size_t successCount = 0;
+    size_t failCount = 0;
+
+    for (const auto& rec : targets) {
+        if (g_interrupted.load()) {
+            kvault::Logger::warn("Operation interrupted by user signal.");
+            return 130;
+        }
+
+        const bool isDirArchive = rec.ends_with(".kvdir");
+        std::filesystem::path destPath;
+
+        if (!opts.outputDir.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(opts.outputDir, ec);
+            if (isDirArchive) {
+                std::string folderName = rec.substr(0, rec.size() - 6);
+                destPath = std::filesystem::path(opts.outputDir) / folderName;
+            } else {
+                destPath = std::filesystem::path(opts.outputDir) / rec;
+            }
+        } else {
+            destPath = opts.outputFile;
+        }
+
+        if (isDirArchive) {
+            std::cout << "[*] Restoring directory archive: " << rec << " -> " << destPath.string() << "\n";
+            if (vault.decryptDirectory(rec, destPath, opts.key)) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+        } else {
+            std::cout << "[*] Restoring record: " << rec << " -> " << destPath.string() << "\n";
+            if (vault.decryptFile(rec, destPath, opts.key)) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+        }
+    }
+
+    if (targets.size() > 1) {
+        std::cout << "\nBatch Decryption Complete: " << successCount << " restored, "
+                  << failCount << " failed.\n";
+    }
+    return (failCount > 0) ? 1 : 0;
+}
+
+/**
+ * @brief Formats and displays an inventory table of all records in the vault.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @return int Exit code (always 0).
+ */
+static int executeList(kvault::VaultManager& vault) {
+    printBanner();
+    auto records = vault.listRecords();
+
+    std::cout << "\n\033[1;37m" << std::left
+              << std::setw(28) << "RECORD NAME"
+              << std::setw(6)  << "VER"
+              << std::setw(14) << "ORIGINAL"
+              << std::setw(14) << "STORED"
+              << std::setw(12) << "MODE"
+              << std::setw(21) << "MODIFIED"
+              << std::setw(8)  << "STATUS"
+              << "\033[0m\n";
+    std::cout << std::string(103, '-') << "\n";
+
+    uint64_t totalPlain = 0;
+    uint64_t totalEnc = 0;
+
+    for (const auto& r : records) {
+        totalPlain += r.original_size;
+        totalEnc += r.payload_size;
+
+        std::string statusStr = r.is_locked ? "\033[33mLOCKED\033[0m" : "\033[32mREADY\033[0m";
+
+        std::cout << std::left
+                  << std::setw(28) << (r.filename.size() > 27 ? r.filename.substr(0, 24) + "..." : r.filename)
+                  << std::setw(6)  << ("v" + std::to_string(r.version))
+                  << std::setw(14) << formatBytes(r.original_size)
+                  << std::setw(14) << formatBytes(r.payload_size)
+                  << std::setw(12) << formatMode(r.posix_mode)
+                  << std::setw(21) << formatTime(r.mtime_epoch)
+                  << statusStr
+                  << "\n";
+    }
+
+    std::cout << std::string(103, '-') << "\n";
+    std::cout << "Total: " << records.size() << " record(s) | "
+              << "Plaintext: " << formatBytes(totalPlain) << " | "
+              << "Stored Vault Footprint: " << formatBytes(totalEnc) << "\n\n";
+
+    return 0;
+}
+
+/**
+ * @brief Removes specified records from the vault.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @param opts Options containing record targets and confirmation flags.
+ * @return int Exit code (0 for success, non-zero if any deletion failed).
+ */
+static int executeRemove(kvault::VaultManager& vault, const CliOptions& opts) {
+    printBanner();
+    if (opts.fileRecords.empty()) {
+        kvault::Logger::error("Missing required parameter: --file <record>");
+        return 1;
+    }
+
+    int exitCode = 0;
+    for (const auto& rec : opts.fileRecords) {
+        if (!opts.forceDelete) {
+            std::cout << "Are you sure you want to permanently delete vault record '" << rec << "'? [y/N]: ";
+            std::string confirm;
+            if (!std::getline(std::cin, confirm) || (confirm != "y" && confirm != "Y")) {
+                std::cout << "Deletion cancelled for: " << rec << "\n";
+                continue;
+            }
+        }
+
+        if (!vault.deleteRecord(rec)) {
+            exitCode = 1;
+        } else {
+            std::cout << "\033[32m[+] Successfully deleted record: " << rec << "\033[0m\n";
+        }
+    }
+    return exitCode;
+}
+
+/**
+ * @brief Verifies cryptographic HMAC integrity for vault records.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @param opts Options containing record targets and verification passphrase.
+ * @return int Exit code (0 for success, non-zero if HMAC failed).
+ */
+static int executeVerify(kvault::VaultManager& vault, CliOptions& opts) {
+    printBanner();
+
+    std::vector<std::string> targets;
+    if (opts.operateAll) {
+        auto records = vault.listRecords();
+        for (const auto& r : records) targets.push_back(r.filename);
+    } else if (!opts.fileRecords.empty()) {
+        targets = opts.fileRecords;
+    } else {
+        kvault::Logger::error("Missing verify target: specify --file <record> or --all");
+        return 1;
+    }
+
+    if (opts.key.empty()) {
+        opts.key = promptPassphraseMasked("Enter vault passphrase for verification: ");
+        if (opts.key.empty()) {
+            kvault::Logger::error("Passphrase cannot be empty");
+            return 1;
+        }
+    }
+
+    size_t passCount = 0;
+    size_t failCount = 0;
+
+    for (const auto& rec : targets) {
+        std::cout << "[*] Auditing cryptographic HMAC for record: " << rec << " ... ";
+        if (vault.verifyRecord(rec, opts.key)) {
+            std::cout << "\033[32m[VERIFIED OK]\033[0m\n";
+            passCount++;
+        } else {
+            std::cout << "\033[31m[FAILED / TAMPERED]\033[0m\n";
+            failCount++;
+        }
+    }
+
+    std::cout << "\nVerification Audit Complete: " << passCount << " passed, "
+              << failCount << " failed.\n";
+    return (failCount > 0) ? 1 : 0;
+}
+
+/**
+ * @brief Inspects and displays diagnostic and health metrics for the vault.
+ *
+ * @param vault VaultManager reference for storage operations.
+ * @return int Exit code (always 0).
+ */
+static int executeStatus(kvault::VaultManager& vault) {
+    printBanner();
+    auto status = vault.inspectStatus();
+    std::cout << "\nVault Diagnostics for: " << status.vault_path << "\n";
+    std::cout << "  - Initialized:              " << (status.is_initialized ? "YES" : "NO") << "\n";
+    std::cout << "  - Stored Records:           " << status.file_count << "\n";
+    std::cout << "  - Total Encrypted Size:     " << formatBytes(status.total_vault_bytes) << " (" << status.total_vault_bytes << " bytes)\n";
+    std::cout << "  - Kernel Driver Node:       "
+              << (status.kernel_driver_available ? "\033[32mACTIVE (/dev/kvault)\033[0m" : "\033[33mINACTIVE (Software Fallback)\033[0m")
+              << "\n";
+
+    if (status.kernel_driver_available) {
+        std::cout << "  - Driver Protocol Version:  0x" << std::hex << status.kernel_driver_version << std::dec << "\n";
+        std::cout << "  - Lifetime Transformed:     " << formatBytes(status.kernel_bytes_transformed) << " (" << status.kernel_bytes_transformed << " bytes)\n";
+    }
+
+    if (status.stale_locks_pruned > 0) {
+        std::cout << "  - Garbage-Collected Locks:  " << status.stale_locks_pruned << " abandoned lock files pruned\n";
+    }
+
+    if (!status.stored_files.empty()) {
+        std::cout << "\nFiles in Vault:\n";
+        for (const auto& f : status.stored_files) {
+            std::cout << "    [+] " << f << "\n";
+        }
+    }
+    std::cout << "\n";
+    return 0;
+}
+
+/**
+ * @brief Runs cryptographic performance benchmarks on the vault algorithms.
+ *
+ * @param vault VaultManager reference for benchmarking operations.
+ * @param opts Options containing benchmark size configuration.
+ * @return int Exit code (always 0).
+ */
+static int executeBenchmark(kvault::VaultManager& vault, const CliOptions& opts) {
+    printBanner();
+    std::cout << "\n\033[1m[*] Running Cryptographic Performance Benchmark ("
+              << opts.benchSizeMb << " MiB Workload)...\033[0m\n\n";
+
+    auto metrics = vault.runBenchmark(opts.benchSizeMb * 1024 * 1024);
+
+    std::cout << std::left
+              << std::setw(26) << "Operation"
+              << std::setw(38) << "Workload / Details"
+              << std::setw(14) << "Time (ms)"
+              << std::setw(18) << "Throughput"
+              << std::setw(30) << "Engine / Backend"
+              << "\n";
+    std::cout << std::string(126, '=') << "\n";
+
+    for (const auto& m : metrics) {
+        std::cout << std::left
+                  << std::setw(26) << m.operation
+                  << std::setw(38) << m.detail
+                  << std::setw(14) << std::fixed << std::setprecision(2) << m.elapsed_ms;
+
+        if (m.operation.find("PBKDF2") != std::string::npos) {
+            std::string iterStr = std::to_string(static_cast<uint64_t>(m.throughput_mb_s)) + " iter/s";
+            std::cout << std::setw(18) << iterStr;
+        } else {
+            std::ostringstream ss;
+            ss << std::fixed << std::setprecision(2) << m.throughput_mb_s << " MB/s";
+            std::cout << std::setw(18) << ss.str();
+        }
+
+        std::cout << std::setw(30) << m.backend << "\n";
+    }
+    std::cout << std::string(120, '=') << "\n\n";
+    return 0;
+}
+
 } // namespace
 
 /**
@@ -199,451 +730,53 @@ void printUsage(const char* prog) {
  * and immediate memory scrubbing of credentials from argv.
  */
 int main(int argc, char* argv[]) {
+    // Register OS signal handlers for graceful cancellation
     installSignalHandlers();
 
-    if (argc < 2) {
-        printBanner();
-        printUsage(argv[0]);
-        return 1;
+    // Parse options from command-line arguments
+    std::string command;
+    CliOptions opts;
+    if (!parseCommandLineArgs(argc, argv, command, opts)) {
+        return (argc >= 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) ? 0 : 1;
     }
 
-    std::string command = argv[1];
-    if (command == "--help" || command == "-h") {
-        printBanner();
-        printUsage(argv[0]);
-        return 0;
-    }
-
-    std::string vaultPath;
-    std::vector<std::string> inputFiles;
-    std::string inputDir;
-    std::vector<std::string> fileRecords;
-    std::string outputFile;
-    std::string outputDir;
-    std::string key;
-    bool operateAll = false;
-    bool shredSource = false;
-    bool forceDelete = false;
-    size_t benchSizeMb = 16;
-    bool verbose = false;
-
-    int i = 2;
-    while (i < argc) {
-        std::string_view arg = argv[i];
-        if (arg == "--vault" && i + 1 < argc) {
-            vaultPath = argv[++i];
-        } else if (arg == "--in") {
-            while (i + 1 < argc && argv[i + 1][0] != '-') {
-                inputFiles.emplace_back(argv[++i]);
-            }
-        } else if (arg == "--dir" && i + 1 < argc) {
-            inputDir = argv[++i];
-        } else if (arg == "--file") {
-            while (i + 1 < argc && argv[i + 1][0] != '-') {
-                fileRecords.emplace_back(argv[++i]);
-            }
-        } else if (arg == "--out" && i + 1 < argc) {
-            outputFile = argv[++i];
-        } else if (arg == "--out-dir" && i + 1 < argc) {
-            outputDir = argv[++i];
-        } else if (arg == "--all") {
-            operateAll = true;
-        } else if (arg == "--shred" || arg == "--wipe") {
-            shredSource = true;
-        } else if (arg == "--force" || arg == "-f") {
-            forceDelete = true;
-        } else if (arg == "--key" && i + 1 < argc) {
-            key = argv[++i];
-            std::memset(argv[i], 'x', std::strlen(argv[i]));
-        } else if (arg == "--key-stdin") {
-            if (!std::getline(std::cin, key)) {
-                key = "";
-            }
-        } else if (arg == "--size-mb" && i + 1 < argc) {
-            benchSizeMb = std::stoul(argv[++i]);
-        } else if (arg == "--verbose" || arg == "-v") {
-            verbose = true;
-        }
-        ++i;
-    }
-
-    if (key.empty()) {
-        const char* envKey = std::getenv("KVAULT_KEY");
-        if (envKey && std::strlen(envKey) > 0) {
-            key = envKey;
-        }
-    }
-
-    if (verbose) {
-        kvault::Logger::setMinLevel(kvault::Logger::Level::Debug);
-    }
-
-    if (command == "bench" || command == "benchmark") {
-        if (vaultPath.empty()) {
-            vaultPath = ".";
-        }
-    } else if (vaultPath.empty()) {
+    // Benchmark mode defaults to current working directory if vaultPath is omitted
+    if ((command == "bench" || command == "benchmark") && opts.vaultPath.empty()) {
+        opts.vaultPath = ".";
+    } else if (opts.vaultPath.empty()) {
         kvault::Logger::error("Missing required parameter: --vault <path>");
         return 1;
     }
 
-    kvault::VaultManager vault(vaultPath);
+    // Initialize vault manager and dispatch command
+    kvault::VaultManager vault(opts.vaultPath);
     int exitCode = 0;
 
     if (command == "init") {
-        printBanner();
-        if (!vault.initializeVault()) {
-            exitCode = 1;
-        }
+        exitCode = executeInit(vault);
     } else if (command == "encrypt") {
-        printBanner();
-
-        if (inputFiles.empty() && inputDir.empty()) {
-            kvault::Logger::error("Missing input: Specify --in <file...> or --dir <folder>");
-            return 1;
-        }
-
-        // Passphrase prompt (once for batch)
-        if (key.empty()) {
-            key = promptPassphraseMasked("Enter vault passphrase: ");
-            if (key.empty()) {
-                kvault::Logger::error("Passphrase cannot be empty");
-                return 1;
-            }
-            std::string confirm = promptPassphraseMasked("Confirm vault passphrase: ");
-            if (key != confirm) {
-                kvault::Logger::error("Passphrase confirmation mismatch. Encryption aborted.");
-                kvault::KeyDerivation::secureZero(key.data(), key.size());
-                kvault::KeyDerivation::secureZero(confirm.data(), confirm.size());
-                return 1;
-            }
-            kvault::KeyDerivation::secureZero(confirm.data(), confirm.size());
-        }
-
-        if (!inputDir.empty()) {
-            std::cout << "[*] Encrypting directory hierarchy: " << inputDir << "\n";
-            if (!vault.encryptDirectory(inputDir, key)) {
-                exitCode = 1;
-            }
-        }
-
-        if (!inputFiles.empty()) {
-            std::vector<std::string> expandedFiles = expandWildcards(inputFiles);
-            if (expandedFiles.empty()) {
-                kvault::Logger::error("No files matched input specification");
-                exitCode = 1;
-            } else {
-                size_t successCount = 0;
-                size_t failCount = 0;
-
-                for (const auto& f : expandedFiles) {
-                    if (g_interrupted.load()) {
-                        kvault::Logger::warn("Operation interrupted by user signal.");
-                        exitCode = 130;
-                        break;
-                    }
-
-                    std::error_code ec;
-                    if (std::filesystem::is_directory(f, ec)) {
-                        std::cout << "[*] Encrypting directory: " << f << "\n";
-                        if (vault.encryptDirectory(f, key)) {
-                            successCount++;
-                        } else {
-                            failCount++;
-                        }
-                    } else {
-                        std::cout << "[*] Encrypting file: " << f << "\n";
-                        if (vault.encryptFile(f, key)) {
-                            successCount++;
-                            if (shredSource) {
-                                std::cout << "    [+] Securely shredding source file: " << f << "\n";
-                                kvault::VaultManager::shredFile(f);
-                            }
-                        } else {
-                            failCount++;
-                        }
-                    }
-                }
-
-                std::cout << "\nBatch Encryption Complete: " << successCount << " succeeded, "
-                          << failCount << " failed.\n";
-                if (failCount > 0) exitCode = 1;
-            }
-        }
+        exitCode = executeEncrypt(vault, opts);
     } else if (command == "decrypt") {
-        printBanner();
-
-        std::vector<std::string> targets;
-        if (operateAll) {
-            auto records = vault.listRecords();
-            for (const auto& r : records) {
-                targets.push_back(r.filename);
-            }
-            if (targets.empty()) {
-                kvault::Logger::warn("No records found in vault to decrypt.");
-                return 0;
-            }
-        } else if (!fileRecords.empty()) {
-            // Expand wildcards against stored records
-            auto records = vault.listRecords();
-            for (const auto& pat : fileRecords) {
-                if (pat.find('*') != std::string::npos || pat.find('?') != std::string::npos) {
-                    for (const auto& r : records) {
-                        if (fnmatch(pat.c_str(), r.filename.c_str(), 0) == 0) {
-                            targets.push_back(r.filename);
-                        }
-                    }
-                } else {
-                    targets.push_back(pat);
-                }
-            }
-        } else {
-            kvault::Logger::error("Missing decrypt target: specify --file <record...> or --all");
-            return 1;
-        }
-
-        if (targets.size() > 1 || !outputDir.empty() || operateAll) {
-            if (outputDir.empty() && !outputFile.empty()) {
-                outputDir = outputFile;
-            }
-            if (outputDir.empty()) {
-                kvault::Logger::error("Batch decryption requires destination directory: --out-dir <folder>");
-                return 1;
-            }
-        } else if (outputFile.empty()) {
-            kvault::Logger::error("Missing required parameter: --out <destination> or --out-dir <folder>");
-            return 1;
-        }
-
-        if (key.empty()) {
-            key = promptPassphraseMasked("Enter vault passphrase: ");
-            if (key.empty()) {
-                kvault::Logger::error("Passphrase cannot be empty");
-                return 1;
-            }
-        }
-
-        size_t successCount = 0;
-        size_t failCount = 0;
-
-        for (const auto& rec : targets) {
-            if (g_interrupted.load()) {
-                kvault::Logger::warn("Operation interrupted by user signal.");
-                exitCode = 130;
-                break;
-            }
-
-            const bool isDirArchive = rec.ends_with(".kvdir");
-            std::filesystem::path destPath;
-
-            if (!outputDir.empty()) {
-                std::error_code ec;
-                std::filesystem::create_directories(outputDir, ec);
-                if (isDirArchive) {
-                    std::string folderName = rec.substr(0, rec.size() - 6);
-                    destPath = std::filesystem::path(outputDir) / folderName;
-                } else {
-                    destPath = std::filesystem::path(outputDir) / rec;
-                }
-            } else {
-                destPath = outputFile;
-            }
-
-            if (isDirArchive) {
-                std::cout << "[*] Restoring directory archive: " << rec << " -> " << destPath.string() << "\n";
-                if (vault.decryptDirectory(rec, destPath, key)) {
-                    successCount++;
-                } else {
-                    failCount++;
-                }
-            } else {
-                std::cout << "[*] Restoring record: " << rec << " -> " << destPath.string() << "\n";
-                if (vault.decryptFile(rec, destPath, key)) {
-                    successCount++;
-                } else {
-                    failCount++;
-                }
-            }
-        }
-
-        if (targets.size() > 1) {
-            std::cout << "\nBatch Decryption Complete: " << successCount << " restored, "
-                      << failCount << " failed.\n";
-        }
-        if (failCount > 0) exitCode = 1;
-
+        exitCode = executeDecrypt(vault, opts);
     } else if (command == "list" || command == "ls") {
-        printBanner();
-        auto records = vault.listRecords();
-
-        std::cout << "\n\033[1;37m" << std::left
-                  << std::setw(28) << "RECORD NAME"
-                  << std::setw(6)  << "VER"
-                  << std::setw(14) << "ORIGINAL"
-                  << std::setw(14) << "STORED"
-                  << std::setw(12) << "MODE"
-                  << std::setw(21) << "MODIFIED"
-                  << std::setw(8)  << "STATUS"
-                  << "\033[0m\n";
-        std::cout << std::string(103, '-') << "\n";
-
-        uint64_t totalPlain = 0;
-        uint64_t totalEnc = 0;
-
-        for (const auto& r : records) {
-            totalPlain += r.original_size;
-            totalEnc += r.payload_size;
-
-            std::string statusStr = r.is_locked ? "\033[33mLOCKED\033[0m" : "\033[32mREADY\033[0m";
-
-            std::cout << std::left
-                      << std::setw(28) << (r.filename.size() > 27 ? r.filename.substr(0, 24) + "..." : r.filename)
-                      << std::setw(6)  << ("v" + std::to_string(r.version))
-                      << std::setw(14) << formatBytes(r.original_size)
-                      << std::setw(14) << formatBytes(r.payload_size)
-                      << std::setw(12) << formatMode(r.posix_mode)
-                      << std::setw(21) << formatTime(r.mtime_epoch)
-                      << statusStr
-                      << "\n";
-        }
-
-        std::cout << std::string(103, '-') << "\n";
-        std::cout << "Total: " << records.size() << " record(s) | "
-                  << "Plaintext: " << formatBytes(totalPlain) << " | "
-                  << "Stored Vault Footprint: " << formatBytes(totalEnc) << "\n\n";
-
+        exitCode = executeList(vault);
     } else if (command == "rm" || command == "delete") {
-        printBanner();
-        if (fileRecords.empty()) {
-            kvault::Logger::error("Missing required parameter: --file <record>");
-            return 1;
-        }
-
-        for (const auto& rec : fileRecords) {
-            if (!forceDelete) {
-                std::cout << "Are you sure you want to permanently delete vault record '" << rec << "'? [y/N]: ";
-                std::string confirm;
-                if (!std::getline(std::cin, confirm) || (confirm != "y" && confirm != "Y")) {
-                    std::cout << "Deletion cancelled for: " << rec << "\n";
-                    continue;
-                }
-            }
-
-            if (!vault.deleteRecord(rec)) {
-                exitCode = 1;
-            } else {
-                std::cout << "\033[32m[+] Successfully deleted record: " << rec << "\033[0m\n";
-            }
-        }
+        exitCode = executeRemove(vault, opts);
     } else if (command == "verify" || command == "check") {
-        printBanner();
-
-        std::vector<std::string> targets;
-        if (operateAll) {
-            auto records = vault.listRecords();
-            for (const auto& r : records) targets.push_back(r.filename);
-        } else if (!fileRecords.empty()) {
-            targets = fileRecords;
-        } else {
-            kvault::Logger::error("Missing verify target: specify --file <record> or --all");
-            return 1;
-        }
-
-        if (key.empty()) {
-            key = promptPassphraseMasked("Enter vault passphrase for verification: ");
-            if (key.empty()) {
-                kvault::Logger::error("Passphrase cannot be empty");
-                return 1;
-            }
-        }
-
-        size_t passCount = 0;
-        size_t failCount = 0;
-
-        for (const auto& rec : targets) {
-            std::cout << "[*] Auditing cryptographic HMAC for record: " << rec << " ... ";
-            if (vault.verifyRecord(rec, key)) {
-                std::cout << "\033[32m[VERIFIED OK]\033[0m\n";
-                passCount++;
-            } else {
-                std::cout << "\033[31m[FAILED / TAMPERED]\033[0m\n";
-                failCount++;
-            }
-        }
-
-        std::cout << "\nVerification Audit Complete: " << passCount << " passed, "
-                  << failCount << " failed.\n";
-        if (failCount > 0) exitCode = 1;
-
+        exitCode = executeVerify(vault, opts);
     } else if (command == "status") {
-        printBanner();
-        auto status = vault.inspectStatus();
-        std::cout << "\nVault Diagnostics for: " << status.vault_path << "\n";
-        std::cout << "  - Initialized:              " << (status.is_initialized ? "YES" : "NO") << "\n";
-        std::cout << "  - Stored Records:           " << status.file_count << "\n";
-        std::cout << "  - Total Encrypted Size:     " << formatBytes(status.total_vault_bytes) << " (" << status.total_vault_bytes << " bytes)\n";
-        std::cout << "  - Kernel Driver Node:       "
-                  << (status.kernel_driver_available ? "\033[32mACTIVE (/dev/kvault)\033[0m" : "\033[33mINACTIVE (Software Fallback)\033[0m")
-                  << "\n";
-
-        if (status.kernel_driver_available) {
-            std::cout << "  - Driver Protocol Version:  0x" << std::hex << status.kernel_driver_version << std::dec << "\n";
-            std::cout << "  - Lifetime Transformed:     " << formatBytes(status.kernel_bytes_transformed) << " (" << status.kernel_bytes_transformed << " bytes)\n";
-        }
-
-        if (status.stale_locks_pruned > 0) {
-            std::cout << "  - Garbage-Collected Locks:  " << status.stale_locks_pruned << " abandoned lock files pruned\n";
-        }
-
-        if (!status.stored_files.empty()) {
-            std::cout << "\nFiles in Vault:\n";
-            for (const auto& f : status.stored_files) {
-                std::cout << "    [+] " << f << "\n";
-            }
-        }
-        std::cout << "\n";
+        exitCode = executeStatus(vault);
     } else if (command == "bench" || command == "benchmark") {
-        printBanner();
-        std::cout << "\n\033[1m[*] Running Cryptographic Performance Benchmark ("
-                  << benchSizeMb << " MiB Workload)...\033[0m\n\n";
-
-        auto metrics = vault.runBenchmark(benchSizeMb * 1024 * 1024);
-
-        std::cout << std::left
-                  << std::setw(26) << "Operation"
-                  << std::setw(38) << "Workload / Details"
-                  << std::setw(14) << "Time (ms)"
-                  << std::setw(18) << "Throughput"
-                  << std::setw(30) << "Engine / Backend"
-                  << "\n";
-        std::cout << std::string(126, '=') << "\n";
-
-        for (const auto& m : metrics) {
-            std::cout << std::left
-                      << std::setw(26) << m.operation
-                      << std::setw(38) << m.detail
-                      << std::setw(14) << std::fixed << std::setprecision(2) << m.elapsed_ms;
-
-            if (m.operation.find("PBKDF2") != std::string::npos) {
-                std::string iterStr = std::to_string(static_cast<uint64_t>(m.throughput_mb_s)) + " iter/s";
-                std::cout << std::setw(18) << iterStr;
-            } else {
-                std::ostringstream ss;
-                ss << std::fixed << std::setprecision(2) << m.throughput_mb_s << " MB/s";
-                std::cout << std::setw(18) << ss.str();
-            }
-
-            std::cout << std::setw(30) << m.backend << "\n";
-        }
-        std::cout << std::string(120, '=') << "\n\n";
+        exitCode = executeBenchmark(vault, opts);
     } else {
         kvault::Logger::error("Unknown command: " + command);
         printUsage(argv[0]);
         exitCode = 1;
     }
 
-    if (!key.empty()) {
-        kvault::KeyDerivation::secureZero(key.data(), key.size());
+    // Securely wipe sensitive passphrase from process memory
+    if (!opts.key.empty()) {
+        kvault::KeyDerivation::secureZero(opts.key.data(), opts.key.size());
     }
 
     return exitCode;

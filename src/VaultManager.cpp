@@ -1334,9 +1334,86 @@ bool VaultManager::shredFile(const std::filesystem::path& targetFile) {
 }
 
 /**
- * @brief Recursively archives and encrypts an entire directory tree into a single vault record.
+ * @brief Serializes a single filesystem entry (directory or regular file) into the directory archive pack.
  *
- * @param srcDir Path to the local directory hierarchy to archive.
+ * @param pack Output archive stream.
+ * @param entry Filesystem directory entry to serialize.
+ * @param cleanSrcDir Canonical base path of the source directory.
+ * @param buffer Scratch buffer used for streaming file chunks.
+ * @return true if the entry was successfully serialized, false if I/O error occurred.
+ */
+static bool writeDirectoryEntry(std::ofstream& pack,
+                                const std::filesystem::directory_entry& entry,
+                                const std::filesystem::path& cleanSrcDir,
+                                std::vector<uint8_t>& buffer) {
+    std::error_code ec;
+    // Compute relative path within the archive hierarchy
+    std::string relPath = std::filesystem::relative(entry.path(), cleanSrcDir, ec).generic_string();
+    if (relPath.empty() || relPath == "." || relPath == "..") {
+        return true;
+    }
+
+    struct stat st{};
+    if (::stat(entry.path().c_str(), &st) != 0) {
+        Logger::warn("Could not stat entry, skipping: " + entry.path().string());
+        return true;
+    }
+
+    // Determine type tag (1: Directory, 2: Regular file)
+    uint8_t type = 0;
+    if (entry.is_directory(ec)) {
+        type = 1;
+    } else if (entry.is_regular_file(ec)) {
+        type = 2;
+    } else {
+        return true;
+    }
+
+    uint16_t pathLen = static_cast<uint16_t>(relPath.size());
+    uint32_t mode = static_cast<uint32_t>(st.st_mode & 07777);
+    uint64_t mtime = static_cast<uint64_t>(st.st_mtime);
+    uint64_t fileSize = (type == 2) ? static_cast<uint64_t>(st.st_size) : 0;
+
+    // Convert metadata fields to little-endian byte order
+    uint16_t pathLenLe = htole16(pathLen);
+    uint32_t modeLe = htole32(mode);
+    uint64_t mtimeLe = htole64(mtime);
+    uint64_t fileSizeLe = htole64(fileSize);
+
+    pack.write(reinterpret_cast<const char*>(&type), sizeof(type));
+    pack.write(reinterpret_cast<const char*>(&pathLenLe), sizeof(pathLenLe));
+    pack.write(relPath.data(), pathLen);
+    pack.write(reinterpret_cast<const char*>(&modeLe), sizeof(modeLe));
+    pack.write(reinterpret_cast<const char*>(&mtimeLe), sizeof(mtimeLe));
+    pack.write(reinterpret_cast<const char*>(&fileSizeLe), sizeof(fileSizeLe));
+
+    // Stream regular file contents in 64 KiB chunks
+    if (type == 2 && fileSize > 0) {
+        std::ifstream fileIn(entry.path(), std::ios::binary);
+        if (!fileIn) {
+            Logger::error("Failed to read file in directory: " + entry.path().string());
+            return false;
+        }
+        uint64_t remaining = fileSize;
+        while (remaining > 0) {
+            const size_t toRead = static_cast<size_t>(
+                std::min(static_cast<uint64_t>(VaultManager::CHUNK_SIZE), remaining));
+            fileIn.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(toRead));
+            if (static_cast<size_t>(fileIn.gcount()) != toRead) {
+                Logger::error("File read error while packing: " + entry.path().string());
+                return false;
+            }
+            pack.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(toRead));
+            remaining -= toRead;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Archives and encrypts an entire directory tree into a single authenticated vault record.
+ *
+ * @param srcDir Path to the local directory to archive and encrypt.
  * @param passphrase Secret user passphrase used to derive cryptographic keys.
  * @param recordName Optional vault record name (defaults to srcDir folder name with .kvdir suffix).
  * @return true if the directory was successfully archived, encrypted, and written atomically.
@@ -1393,72 +1470,15 @@ bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
     pack.write(magicHeader, sizeof(magicHeader));
 
     std::vector<uint8_t> buffer(CHUNK_SIZE);
-
     for (const auto& entry : std::filesystem::recursive_directory_iterator(cleanSrcDir, ec)) {
         if (entry.is_symlink(ec)) {
             Logger::warn("Skipping symbolic link in directory tree: " + entry.path().string());
             continue;
         }
-
-        std::string relPath = std::filesystem::relative(entry.path(), cleanSrcDir, ec).generic_string();
-        if (relPath.empty() || relPath == "." || relPath == "..") {
-            continue;
-        }
-
-        struct stat st{};
-        if (::stat(entry.path().c_str(), &st) != 0) {
-            Logger::warn("Could not stat entry, skipping: " + entry.path().string());
-            continue;
-        }
-
-        uint8_t type = 0;
-        if (entry.is_directory(ec)) {
-            type = 1;
-        } else if (entry.is_regular_file(ec)) {
-            type = 2;
-        } else {
-            continue;
-        }
-
-        uint16_t pathLen = static_cast<uint16_t>(relPath.size());
-        uint32_t mode = static_cast<uint32_t>(st.st_mode & 07777);
-        uint64_t mtime = static_cast<uint64_t>(st.st_mtime);
-        uint64_t fileSize = (type == 2) ? static_cast<uint64_t>(st.st_size) : 0;
-
-        uint16_t pathLenLe = htole16(pathLen);
-        uint32_t modeLe = htole32(mode);
-        uint64_t mtimeLe = htole64(mtime);
-        uint64_t fileSizeLe = htole64(fileSize);
-
-        pack.write(reinterpret_cast<const char*>(&type), sizeof(type));
-        pack.write(reinterpret_cast<const char*>(&pathLenLe), sizeof(pathLenLe));
-        pack.write(relPath.data(), pathLen);
-        pack.write(reinterpret_cast<const char*>(&modeLe), sizeof(modeLe));
-        pack.write(reinterpret_cast<const char*>(&mtimeLe), sizeof(mtimeLe));
-        pack.write(reinterpret_cast<const char*>(&fileSizeLe), sizeof(fileSizeLe));
-
-        if (type == 2 && fileSize > 0) {
-            std::ifstream fileIn(entry.path(), std::ios::binary);
-            if (!fileIn) {
-                Logger::error("Failed to read file in directory: " + entry.path().string());
-                pack.close();
-                shredFile(tempPackPath);
-                return false;
-            }
-            uint64_t remaining = fileSize;
-            while (remaining > 0) {
-                const size_t toRead = static_cast<size_t>(
-                    std::min(static_cast<uint64_t>(CHUNK_SIZE), remaining));
-                fileIn.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(toRead));
-                if (static_cast<size_t>(fileIn.gcount()) != toRead) {
-                    Logger::error("File read error while packing: " + entry.path().string());
-                    pack.close();
-                    shredFile(tempPackPath);
-                    return false;
-                }
-                pack.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(toRead));
-                remaining -= toRead;
-            }
+        if (!writeDirectoryEntry(pack, entry, cleanSrcDir, buffer)) {
+            pack.close();
+            shredFile(tempPackPath);
+            return false;
         }
     }
 
@@ -1486,6 +1506,107 @@ bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
         Logger::info("Successfully encrypted directory " + cleanSrcDir.string() + " as vault record: " + safeRecName);
     }
     return success;
+}
+
+/**
+ * @brief Unpacks a single directory or file entry from the archive pack stream.
+ *
+ * @param pack Input stream of the decrypted directory pack.
+ * @param cleanDestDir Target root directory for extraction.
+ * @param buffer Scratch buffer for streaming file data.
+ * @param hasMore Output boolean set to true if another entry remains, false if at EOF.
+ * @return true if the entry was unpacked successfully, false if corrupted or traversal detected.
+ */
+static bool unpackDirectoryEntry(std::ifstream& pack,
+                                 const std::filesystem::path& cleanDestDir,
+                                 std::vector<uint8_t>& buffer,
+                                 bool& hasMore) {
+    hasMore = false;
+    if (pack.peek() == EOF) {
+        return true;
+    }
+
+    uint8_t type = 0;
+    uint16_t pathLenLe = 0;
+    if (!pack.read(reinterpret_cast<char*>(&type), sizeof(type))) return true;
+    if (!pack.read(reinterpret_cast<char*>(&pathLenLe), sizeof(pathLenLe))) {
+        return false;
+    }
+    uint16_t pathLen = le16toh(pathLenLe);
+    if (pathLen == 0 || pathLen > 4096) {
+        return false;
+    }
+
+    std::string relPath(pathLen, '\0');
+    pack.read(relPath.data(), pathLen);
+
+    // Validate path boundaries against directory traversal
+    if (relPath.find("..") != std::string::npos || relPath.front() == '/' || relPath.front() == '\\') {
+        Logger::error("Refusing to unpack entry with unsafe path: " + relPath);
+        return false;
+    }
+
+    uint32_t modeLe = 0;
+    uint64_t mtimeLe = 0;
+    uint64_t fileSizeLe = 0;
+    pack.read(reinterpret_cast<char*>(&modeLe), sizeof(modeLe));
+    pack.read(reinterpret_cast<char*>(&mtimeLe), sizeof(mtimeLe));
+    pack.read(reinterpret_cast<char*>(&fileSizeLe), sizeof(fileSizeLe));
+
+    uint32_t mode = le32toh(modeLe);
+    uint64_t mtime = le64toh(mtimeLe);
+    uint64_t fileSize = le64toh(fileSizeLe);
+
+    std::error_code ec;
+    const std::filesystem::path target = (cleanDestDir / relPath).lexically_normal();
+    auto relCheck = std::filesystem::relative(target, cleanDestDir, ec);
+    if (relCheck.empty() || relCheck.string().starts_with("..") || relCheck.is_absolute() || target.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal attempt in archive: " + relPath);
+        return false;
+    }
+
+    if (type == 1) { // Directory
+        std::filesystem::create_directories(target, ec);
+        if (mode != 0) {
+            ::chmod(target.c_str(), static_cast<mode_t>(mode & 07777));
+        }
+    } else if (type == 2) { // File
+        std::filesystem::create_directories(target.parent_path(), ec);
+        std::ofstream fileOut(target, std::ios::binary | std::ios::trunc);
+        if (!fileOut) {
+            Logger::error("Cannot create destination file: " + target.string());
+            return false;
+        }
+
+        uint64_t remaining = fileSize;
+        while (remaining > 0) {
+            const size_t toRead = static_cast<size_t>(
+                std::min(static_cast<uint64_t>(VaultManager::CHUNK_SIZE), remaining));
+            pack.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(toRead));
+            if (static_cast<size_t>(pack.gcount()) != toRead) {
+                Logger::error("Corrupted archive data while unpacking: " + target.string());
+                return false;
+            }
+            fileOut.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(toRead));
+            remaining -= toRead;
+        }
+        fileOut.close();
+
+        if (mode != 0) {
+            ::chmod(target.c_str(), static_cast<mode_t>(mode & 07777));
+        }
+        if (mtime != 0) {
+            struct timespec times[2];
+            times[0].tv_sec = static_cast<time_t>(mtime);
+            times[0].tv_nsec = 0;
+            times[1].tv_sec = static_cast<time_t>(mtime);
+            times[1].tv_nsec = 0;
+            ::utimensat(AT_FDCWD, target.c_str(), times, 0);
+        }
+    }
+
+    hasMore = true;
+    return true;
 }
 
 /**
@@ -1564,91 +1685,12 @@ bool VaultManager::decryptDirectory(const std::string& recordName,
 
     std::vector<uint8_t> buffer(CHUNK_SIZE);
     bool extractSuccess = true;
+    bool hasMore = true;
 
-    while (pack.peek() != EOF) {
-        uint8_t type = 0;
-        uint16_t pathLenLe = 0;
-        if (!pack.read(reinterpret_cast<char*>(&type), sizeof(type))) break;
-        if (!pack.read(reinterpret_cast<char*>(&pathLenLe), sizeof(pathLenLe))) {
+    while (hasMore) {
+        if (!unpackDirectoryEntry(pack, cleanDestDir, buffer, hasMore)) {
             extractSuccess = false;
             break;
-        }
-        uint16_t pathLen = le16toh(pathLenLe);
-        if (pathLen == 0 || pathLen > 4096) {
-            extractSuccess = false;
-            break;
-        }
-
-        std::string relPath(pathLen, '\0');
-        pack.read(relPath.data(), pathLen);
-
-        if (relPath.find("..") != std::string::npos || relPath.front() == '/' || relPath.front() == '\\') {
-            Logger::error("Refusing to unpack entry with unsafe path: " + relPath);
-            extractSuccess = false;
-            break;
-        }
-
-        uint32_t modeLe = 0;
-        uint64_t mtimeLe = 0;
-        uint64_t fileSizeLe = 0;
-        pack.read(reinterpret_cast<char*>(&modeLe), sizeof(modeLe));
-        pack.read(reinterpret_cast<char*>(&mtimeLe), sizeof(mtimeLe));
-        pack.read(reinterpret_cast<char*>(&fileSizeLe), sizeof(fileSizeLe));
-
-        uint32_t mode = le32toh(modeLe);
-        uint64_t mtime = le64toh(mtimeLe);
-        uint64_t fileSize = le64toh(fileSizeLe);
-
-        const std::filesystem::path target = (cleanDestDir / relPath).lexically_normal();
-        auto relCheck = std::filesystem::relative(target, cleanDestDir, ec);
-        if (relCheck.empty() || relCheck.string().starts_with("..") || relCheck.is_absolute() || target.string().find("..") != std::string::npos) {
-            Logger::error("Path traversal attempt in archive: " + relPath);
-            extractSuccess = false;
-            break;
-        }
-
-        if (type == 1) { // Directory
-            std::filesystem::create_directories(target, ec);
-            if (mode != 0) {
-                ::chmod(target.c_str(), static_cast<mode_t>(mode & 07777));
-            }
-        } else if (type == 2) { // File
-            std::filesystem::create_directories(target.parent_path(), ec);
-            std::ofstream fileOut(target, std::ios::binary | std::ios::trunc);
-            if (!fileOut) {
-                Logger::error("Cannot create destination file: " + target.string());
-                extractSuccess = false;
-                break;
-            }
-
-            uint64_t remaining = fileSize;
-            while (remaining > 0) {
-                const size_t toRead = static_cast<size_t>(
-                    std::min(static_cast<uint64_t>(CHUNK_SIZE), remaining));
-                pack.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(toRead));
-                if (static_cast<size_t>(pack.gcount()) != toRead) {
-                    Logger::error("Corrupted archive data while unpacking: " + target.string());
-                    extractSuccess = false;
-                    break;
-                }
-                fileOut.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(toRead));
-                remaining -= toRead;
-            }
-            fileOut.close();
-
-            if (!extractSuccess) break;
-
-            if (mode != 0) {
-                ::chmod(target.c_str(), static_cast<mode_t>(mode & 07777));
-            }
-            if (mtime != 0) {
-                struct timespec times[2];
-                times[0].tv_sec = static_cast<time_t>(mtime);
-                times[0].tv_nsec = 0;
-                times[1].tv_sec = static_cast<time_t>(mtime);
-                times[1].tv_nsec = 0;
-                ::utimensat(AT_FDCWD, target.c_str(), times, 0);
-            }
         }
     }
 
