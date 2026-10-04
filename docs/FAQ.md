@@ -12,6 +12,7 @@ This document serves as the comprehensive architectural and systems FAQ for **Ke
 5. [Storage, Concurrency & Crash Durability](#5-storage-concurrency--crash-durability)
 6. [Directory Archiving & Path Traversal Mitigations](#6-directory-archiving--path-traversal-mitigations)
 7. [Enterprise Operations & Deployment](#7-enterprise-operations--deployment)
+8. [Native Desktop GUI & Packaging Considerations](#8-native-desktop-gui--packaging-considerations)
 
 ---
 
@@ -188,3 +189,30 @@ Yes:
 - The user-space CLI and GUI run completely unprivileged inside standard Linux containers.
 - If the host machine has `/dev/kvault` loaded, the device node can be passed to the container via `--device /dev/kvault:/dev/kvault`.
 - If the container is unprivileged and has no device access, KernelVault's automatic fallback immediately engages and runs with full software cryptographic acceleration.
+
+---
+
+## 8. Native Desktop GUI & Packaging Considerations
+
+### Q8.1: Why did `kvault-gui` fail to launch with `error while loading shared libraries: libQt6Widgets.so.6` when installed from the Debian package?
+When a binary links against dynamically shared libraries (like Qt6), Linux's dynamic linker (`ld.so`) must locate those `.so` files in standard library search paths at runtime.
+* If a `.deb` package does not declare `libqt6widgets6` in its control file `Depends:` field, Debian's package manager (`dpkg` or Ubuntu App Center) will install the package without downloading the required Qt6 shared library.
+* When clicking the desktop launcher, the process exits silently with code 127 due to the missing library.
+* **The Solution:** We resolved this in `CMakeLists.txt` via:
+  ```cmake
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.34), libstdc++6 (>= 12), libqt6widgets6 (>= 6.2.0) | libqt6widgets6t64")
+  ```
+  For systems where the package was installed without dependencies resolved, running `sudo apt update && sudo apt install -y libqt6widgets6` immediately satisfies the dynamic linker.
+
+### Q8.2: How does KernelVault prevent accidental file overwrites in the GUI during decryption and encryption?
+KernelVault implements multi-layered conflict detection:
+1. **Dynamic Target Resolution:** When an encrypted record is selected (e.g. `report.pdf.kvault`), the destination field updates with the plaintext filename (`report.pdf`), preserving folder archives (`.kvdir` is stripped).
+2. **Real-Time Collision Detection:** The UI monitors the target path in real-time. If the path already exists on disk, an inline warning banner appears with an **"Auto-Rename (1)"** button that computes the next non-colliding numeric suffix (`report (1).pdf`, `report (2).pdf`).
+3. **Modal 3-Way Safety Dialogue:** If the user attempts to decrypt over an existing file without explicitly checking *"Allow overwrite"*, KernelVault halts execution and presents an interactive prompt offering **Auto-Rename**, **Overwrite**, or **Cancel**.
+4. **Vault Duplicate Prevention:** Before encrypting, KernelVault checks if the target record already exists in the vault directory, requesting explicit confirmation before overwriting encrypted assets.
+
+### Q8.3: Does the GUI run cryptographic operations on the main Qt event loop thread?
+**No.** Performing 100,000 PBKDF2-HMAC-SHA256 iterations or multi-megabyte streaming AES/HMAC transformations on the main GUI thread causes the desktop window to freeze ("Not Responding") and trigger window-manager kill prompts.
+* All cryptographic operations (`encryptFile`, `decryptRecord`, `verifyIntegrity`, `encryptDirectory`, `decryptDirectory`) are offloaded to dedicated worker threads via `QThread::create()`.
+* The GUI thread maintains a responsive event loop, rendering an animated indeterminate `QProgressBar` marquee and updating status labels via thread-safe signals and slots upon completion.
+

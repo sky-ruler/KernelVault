@@ -212,11 +212,36 @@ If you prefer a graphical interface, launch:
 ```bash
 ./build/kvault-gui
 ```
+*(Or launch **KernelVault** from your Ubuntu / Debian Application Drawer if installed via `.deb` package).*
 
-The desktop interface opens with 3 intuitive tabs:
-1. **Encrypt Files / Folders:** Browse and select multiple files or entire folder trees, toggle secure source shredding, enter your passphrase, and encrypt with one click.
-2. **Decrypt Record:** Select a stored record from a dropdown, choose where you want it restored, and decrypt.
-3. **Vault Inventory & Audit:** Displays a live table of all files in your vault. Double-click any record to switch directly to decryption, or click **"Audit All Records"** to verify cryptographic signatures without touching the disk.
+The desktop interface opens with 3 intuitive tabs and persistent directory memory:
+
+### 1. Setting Your Vault
+Enter or browse to your vault directory (e.g. `~/my_vault`) and click **"Initialize / Open Vault"**. KernelVault automatically remembers your chosen vault path and restore destinations across restarts using persistent settings.
+
+### 2. Encrypting Files & Folders
+- **Drag-and-Drop Ingestion:** Simply drag files or folders from Nautilus, Dolphin, or your desktop directly into the KernelVault window. The app automatically stages the path and selects the Encrypt tab.
+- **Passphrase Usability & Match Verification:** Enter your passphrase, click the `👁 Show` eye toggle to confirm spelling, and type it into the confirmation field. A real-time badge updates (`✓ Passphrases match` or `✗ Passphrases do not match`), locking the Encrypt button until they align to prevent accidental lockouts.
+- **Anti-Forensic Shredding:** Check *"Securely shred source files after encryption"* to perform multi-pass CSPRNG overwriting and `fsync()` before deleting the plaintext source.
+- **Vault Collision Guard:** If a file with the same name already exists inside the vault, KernelVault presents a warning prompt so you never clobber existing records by mistake.
+
+### 3. Decrypting Records & Collision Prevention
+- **Smart Auto-Updating Destination Path:** When you select an encrypted record from the dropdown, the **Destination File/Directory** field automatically updates with the original filename or unpacked folder name (stripping `.kvdir` for folder archives).
+- **Disk Collision Detection:** If a file or folder with that name already exists in the destination folder, KernelVault immediately displays a yellow warning: `⚠️ Target already exists on disk. Collision detected.`
+- **Instant Auto-Rename:** An inline **"Auto-Rename (1)"** button appears next to the path. Clicking it safely appends a non-colliding numeric suffix (e.g., `report (1).pdf`).
+- **Interactive 3-Way Safety Dialog:** If you click **"Decrypt Record"** while a collision exists and *"Allow overwrite"* is unchecked, KernelVault presents a 3-way dialog:
+  - **Auto-Rename:** Restores to a safe, non-colliding filename.
+  - **Overwrite:** Atomically replaces the existing file on disk.
+  - **Cancel:** Aborts the operation without touching your disk.
+
+### 4. Vault Inventory, Search & Context Menus
+- **Live Search & Filter:** Use the instant search bar above the record table to filter records in real-time across filenames, dates, POSIX permission bits, and status.
+- **Right-Click Context Menu:** Right-click any record row for direct actions:
+  - **Restore / Decrypt Record:** Immediately stages the record for decryption.
+  - **Verify Integrity (HMAC):** Cryptographically verifies the authentication tag without decrypting.
+  - **Copy Record Name:** Copies the record filename to the clipboard.
+  - **Delete Record:** Safely deletes the record and its advisory lockfile.
+- **Visual Progress:** An animated progress bar provides visual feedback during key derivation and large-payload streaming.
 
 ---
 
@@ -246,4 +271,6 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 | `Missing required parameter: --vault <path>` | Every command requires specifying which vault folder to operate on. | Add `--vault ~/my_vault` to your command. |
 | `Passphrase verification failed / HMAC mismatch` | The password typed does not match the password used during encryption. | Retype the correct passphrase. KernelVault aborts before any plaintext is touched. |
 | `Permission denied while opening /dev/kvault` | The kernel driver node defaults to root-only if udev rules are not active. | Run `sudo chmod 666 /dev/kvault` or install `packaging/udev/99-kvault.rules`. *(KernelVault automatically falls back to software if access is denied).* |
-| `Destination file already exists` | Attempting to decrypt over an existing file. | Specify a different output filename with `--out <new_name>` to prevent accidental overwrites. |
+| `Destination file already exists` | Attempting to decrypt over an existing file. | In the CLI, specify a different output filename with `--out <new_name>`. In the GUI, click the **"Auto-Rename (1)"** button or check *"Allow overwrite"*. |
+| `kvault-gui does not launch after installing .deb` | Missing Qt6 runtime shared libraries (`libQt6Widgets.so.6`). | Run `sudo apt update && sudo apt install -y libqt6widgets6` (or install packages using `sudo apt install ./kvault-*.deb` instead of bare `dpkg -i`). |
+| `Collision detected: yellow warning banner in GUI` | The restored file or directory name already exists in the target destination folder. | Click **"Auto-Rename (1)"** to append a safe numeric suffix, or check *"Allow overwrite"* if you intend to replace the file. |

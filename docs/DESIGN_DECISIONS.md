@@ -229,6 +229,19 @@ Kernel-assisted utilities cannot function inside standard sandboxed runtimes (li
 
 ---
 
+### L. Safe Destination Resolution & Non-Colliding Collision Safety
+
+#### The Decision
+Whenever an encrypted vault record is selected for restoration, the target path dynamically populates with the original decrypted filename (or directory name, stripping archive markers like `.kvdir`). If a target file or folder already exists on disk, the system prohibits silent clobbering, auto-computes safe sequential numeric suffixes (`(1)`, `(2)`), and presents a modal 3-way conflict dialog (`Auto-Rename` / `Overwrite` / `Cancel`).
+
+#### The Reality Check
+Standard encryption utilities either blindly overwrite existing disk files or abort with opaque error codes. Overwriting an existing file without explicit confirmation can destroy active user data or configuration files in target restoration directories.
+
+#### The Real-World Precedent
+Modern desktop environments, browsers, and archiving utilities (Firefox, Chromium, macOS Finder, GNOME Nautilus, Archive Manager) enforce non-colliding numeric suffixing by default during downloads and extractions to prevent accidental data destruction.
+
+---
+
 ## 3. Architecture Decision Records (ADR) Index
 
 | ADR ID | Decision Title | Status | Primary Driver |
@@ -240,6 +253,7 @@ Kernel-assisted utilities cannot function inside standard sandboxed runtimes (li
 | **ADR-005** | Native `KVDIR1` Directory Archiving (Zero Subprocesses) | **Accepted** | Shell injection defense & Zip-Slip immunity |
 | **ADR-006** | Dual-Engine Fallback (Kernel Driver + Portable C++20) | **Accepted** | Zero-downtime resilience in containerized/unprivileged environments |
 | **ADR-007** | Non-Blocking POSIX Advisory Locking (`fcntl(F_SETLK)`) | **Accepted** | Prevention of multi-process writer collisions and corruption |
+| **ADR-008** | Collision-Safe Decryption & Automated Path Resolution | **Accepted** | Accidental data loss prevention & user-experience alignment |
 
 ---
 

@@ -37,11 +37,12 @@ On a Linux desktop or Ubuntu under WSLg:
 ```bash
 ./build/kvault-gui
 ```
+*(Or launch **KernelVault** from your desktop Application Drawer).*
 
-Choose or initialize a vault. The modernized interface provides three functional tabs:
-1. **Encrypt Files / Folders:** Multi-file and directory selection, source shredding toggle, and passphrase input.
-2. **Decrypt Record:** Record dropdown, output destination chooser, and authenticated restoration.
-3. **Vault Inventory & Audit:** Real-time table view of stored records (sizes, versions, permissions, timestamps, lock states), with interactive buttons to **Verify Integrity (HMAC)**, **Audit All Records**, and safely **Delete Record**.
+The modernized interface provides persistent directory memory and three functional tabs:
+1. **Encrypt Files / Folders:** Multi-file and directory selection, drag-and-drop ingestion, source shredding toggle, duplicate record warning guards, and passphrase entry with eye show/hide toggle and real-time confirmation match badge.
+2. **Decrypt Record:** Record dropdown, smart auto-updating target paths, disk collision detection with yellow warning banners, inline **"Auto-Rename (1)"** button, overwrite toggles, and safe 3-way conflict dialogs.
+3. **Vault Inventory & Audit:** Real-time table view of stored records with an instant live search filter, right-click context menus (**Restore / Decrypt**, **Verify Integrity (HMAC)**, **Copy Record Name**, **Delete Record**), and visual progress marquee.
 
 ## 3. Create test input and vault
 
@@ -166,3 +167,5 @@ This removes only the temporary test directory created by `mktemp`. Leave the bu
 - **`insmod` fails:** inspect `sudo dmesg`; check that the module was built against the target kernel and that kernel module loading is permitted.
 - **The driver is unavailable to the CLI:** inspect `ls -l /dev/kvault` and use the host's normal group/udev policy to grant access. CLI fallback remains available.
 - **Authentication fails:** use the exact passphrase used during encryption and ensure the encrypted record was not modified.
+- **`kvault-gui` fails to launch after installing `.deb` package:** If installed using bare `dpkg -i`, run `sudo apt install -f` or `sudo apt install -y libqt6widgets6` to install the required Qt6 shared library dependencies.
+- **Collision detected warning in GUI:** KernelVault prevents accidental overwrites when a restored file or directory already exists on disk. Click "Auto-Rename (1)" to safely append a numeric suffix or check "Allow overwrite".

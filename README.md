@@ -81,6 +81,16 @@ ctest --test-dir build --output-on-failure
 
 The CLI is `build/kvault`; the desktop app is `build/kvault-gui`. The GUI uses Qt Widgets and shares the same C++ vault engine as the CLI. To build only the CLI and avoid the Qt dependency, omit `qt6-base-dev` and use `-DBUILD_GUI=OFF`. The test suite uses the system GoogleTest installed by `libgtest-dev`; if CMake cannot find it, CMake's FetchContent fallback requires network access.
 
+### Pre-built Debian / Ubuntu Package Installation
+Alternatively, install the pre-compiled `.deb` package directly from [Releases](https://github.com/sky-ruler/KernelVault/releases):
+```bash
+# Recommended: Using apt automatically resolves runtime dependencies (including libqt6widgets6)
+sudo apt update
+sudo apt install -y ./kvault-3.0.1-Linux.deb
+```
+If installing via `dpkg -i` and dependencies are missing, run `sudo apt install -f` or `sudo apt install -y libqt6widgets6`.
+Once installed, launch `kvault` from any terminal or open **KernelVault** directly from your desktop Application Drawer.
+
 WSL supports building and running the CLI and, with WSLg, the Qt desktop app. Both use the user-space cipher when `/dev/kvault` is unavailable. Loading and demonstrating the kernel module requires a suitable Linux kernel; use a disposable Ubuntu VM or Linux machine for that part. WSL may not provide matching module headers or permit loading this out-of-tree driver.
 
 ### Build from an existing Windows checkout in WSL
@@ -174,11 +184,19 @@ On a Linux desktop or Ubuntu under WSLg, start the native interface with:
 ```bash
 ./build/kvault-gui
 ```
+*(Or launch **KernelVault** directly from your desktop Application Drawer if installed via `.deb` package).*
 
-Choose a vault folder and initialize it. The modernized interface provides three functional tabs:
-1. **Encrypt Files / Folders:** Multi-file selector, directory selector, source shred toggle, and passphrase entry.
-2. **Decrypt Record:** Record dropdown, output destination chooser, and authenticated restoration.
-3. **Vault Inventory & Audit:** Real-time table view of stored records (sizes, versions, permissions, timestamps, lock states), with interactive buttons to **Verify Integrity (HMAC)**, **Audit All Records**, and safely **Delete Record**.
+The modernized Qt6 interface includes a complete suite of desktop quality-of-life enhancements:
+
+1. **Smart Destination Path Resolution:** When selecting an encrypted record in the Decrypt tab or browsing for a target directory, the destination path automatically updates with the original decrypted filename or unpacked directory name (e.g. restoring `report.pdf.kvault` populates `~/Downloads/report.pdf`).
+2. **Disk Collision Guard & Auto-Rename:** Real-time conflict detection identifies if a file or directory with the same name already exists on disk, presenting a warning banner and an instant **"Auto-Rename (1)"** button. Decrypting against an existing file without checking "Allow overwrite" presents a safe 3-way conflict dialog (`Auto-Rename` / `Overwrite` / `Cancel`).
+3. **Vault Duplicate Guard:** Verifies whether plaintext files or directory trees already exist inside the vault before encrypting, preventing accidental clobbering.
+4. **Passphrase Usability & Match Confirmation:** Eye toggle buttons (`👁 Show` / `Hide`) on all passphrase fields, plus a real-time Passphrase Match confirmation indicator with colored status (`✓ Passphrases match`).
+5. **Live Inventory Search & Filter:** Real-time search bar directly above the vault record table, dynamically filtering records across names, versions, sizes, POSIX modes, and integrity status as you type.
+6. **Table Context Menus:** Right-click any record row to quickly **Restore / Decrypt**, **Verify Integrity (HMAC)**, **Copy Record Name**, or **Delete Record**.
+7. **Drag-and-Drop Ingestion:** Drag files or folders directly from your desktop file manager (Nautilus, Dolphin, Nemo) into the KernelVault window to instantly stage them for encryption.
+8. **Persistent Session Memory:** Remembers your last-opened vault folder and preferred restore directory across restarts via `QSettings`.
+9. **Animated Progress Marquee:** Smooth visual progress bar feedback during PBKDF2 key derivation and large-payload streaming operations.
 
 > **Passphrase handling:** The CLI supports interactive masked input (with terminal echo disabled via POSIX `termios`), pipeline streaming (`--key-stdin`), the `KVAULT_KEY` environment variable, or explicit command-line flags (`--key`). When `--key` is passed via `argv`, process memory is immediately scrubbed in-place to prevent inspection via `ps aux` or `/proc/<pid>/cmdline`. The GUI masks typed passphrases and securely wipes memory upon completion.
 
