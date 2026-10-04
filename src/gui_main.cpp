@@ -4,16 +4,20 @@
  *
  * Provides GUI access to vault initialization, batch and directory encryption,
  * secure shredding, record decryption, in-place cryptographic HMAC verification,
- * and tabular vault inventory inspection.
+ * tabular vault inventory inspection, smart collision resolution, and real-time filtering.
  */
 
 #include "KeyDerivation.hpp"
 #include "VaultManager.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -25,24 +29,31 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMimeData>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabWidget>
 #include <QThread>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
+#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <functional>
 #include <string>
-#include <vector>
-#include <utility>
-#include <ctime>
 #include <sys/stat.h>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -84,29 +95,81 @@ QString formatTime(uint32_t epoch) {
     return QString::fromUtf8(buf);
 }
 
+QString generateNonCollidingPath(const QString& targetPath) {
+    if (!QFileInfo::exists(targetPath)) {
+        return targetPath;
+    }
+    QFileInfo fi(targetPath);
+    QString dir = fi.absolutePath();
+    QString baseName = fi.completeBaseName();
+    QString suffix = fi.suffix();
+    QString dotSuffix = suffix.isEmpty() ? QString() : "." + suffix;
+
+    int counter = 1;
+    while (counter < 10000) {
+        QString candidate = QString("%1/%2 (%3)%4").arg(dir, baseName).arg(counter).arg(dotSuffix);
+        if (!QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+        counter++;
+    }
+    return targetPath;
+}
+
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
         setWindowTitle("KernelVault - Secure Linux Storage");
-        setMinimumSize(920, 680);
-        resize(1080, 740);
+        setMinimumSize(960, 720);
+        resize(1120, 780);
+        setAcceptDrops(true);
+
+        QSettings settings("KernelVault", "KernelVault");
+        QString lastVault = settings.value("lastVaultPath").toString();
+        if (lastVault.isEmpty() || !QDir(lastVault).exists()) {
+            lastVault = QDir::homePath() + "/kvault-vault";
+        }
+
+        m_destinationDir = settings.value("lastDestinationDir").toString();
+        if (m_destinationDir.isEmpty() || !QDir(m_destinationDir).exists()) {
+            m_destinationDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+            if (m_destinationDir.isEmpty() || !QDir(m_destinationDir).exists()) {
+                m_destinationDir = QDir::homePath() + "/restored";
+            }
+        }
 
         auto* central = new QWidget(this);
         auto* root = new QVBoxLayout(central);
-        root->setContentsMargins(28, 24, 28, 24);
-        root->setSpacing(14);
+        root->setContentsMargins(28, 22, 28, 20);
+        root->setSpacing(12);
 
+        auto* headingRow = new QHBoxLayout();
         auto* heading = new QLabel("KernelVault", central);
         heading->setObjectName("heading");
+        headingRow->addWidget(heading);
+        headingRow->addStretch(1);
+
+        auto* versionBadge = new QLabel("v3.0.1 Enterprise", central);
+        versionBadge->setObjectName("badge");
+        headingRow->addWidget(versionBadge);
+        root->addLayout(headingRow);
+
         auto* subtitle = new QLabel(
-            "High-Assurance Linux Kernel-Assisted Encrypted Storage with POSIX Metadata Preservation.", central);
+            "Linux Kernel-Assisted Encrypted Vault with Authenticated Wire Format (AES-256-CBC + HMAC-SHA256).", central);
         subtitle->setObjectName("muted");
         subtitle->setWordWrap(true);
-        root->addWidget(heading);
         root->addWidget(subtitle);
 
         root->addWidget(buildVaultPanel(central));
         root->addWidget(buildOperations(central), 1);
+
+        // Progress bar for async operations
+        m_progressBar = new QProgressBar(central);
+        m_progressBar->setRange(0, 0);
+        m_progressBar->setFixedHeight(4);
+        m_progressBar->setTextVisible(false);
+        m_progressBar->setVisible(false);
+        root->addWidget(m_progressBar);
 
         m_resultLabel = new QLabel("Choose a vault directory to begin.", central);
         m_resultLabel->setObjectName("result");
@@ -118,20 +181,23 @@ public:
             QMainWindow, QWidget { background: #0f172a; color: #f8fafc; font-size: 13px; font-family: 'Segoe UI', Inter, sans-serif; }
             QLabel#heading { font-size: 26px; font-weight: 700; color: #38bdf8; }
             QLabel#muted { color: #94a3b8; }
+            QLabel#badge { background: #0284c7; color: #ffffff; font-weight: 700; font-size: 11px; padding: 4px 10px; border-radius: 12px; }
             QGroupBox { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
-                        margin-top: 10px; padding: 12px; font-weight: 600; color: #e2e8f0; }
+                        margin-top: 8px; padding: 12px; font-weight: 600; color: #e2e8f0; }
             QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; color: #38bdf8; }
             QLineEdit, QComboBox { background: #0f172a; border: 1px solid #475569; color: #f8fafc;
-                                  border-radius: 6px; padding: 7px 10px; min-height: 20px; }
+                                  border-radius: 6px; padding: 7px 10px; min-height: 22px; }
             QLineEdit:focus, QComboBox:focus { border: 1px solid #38bdf8; }
+            QLineEdit:disabled, QComboBox:disabled { background: #1e293b; color: #64748b; border-color: #334155; }
             QPushButton { background: #334155; border: 1px solid #475569; border-radius: 6px; color: #f8fafc;
-                          padding: 8px 14px; font-weight: 600; }
+                          padding: 8px 14px; font-weight: 600; min-height: 20px; }
             QPushButton:hover { background: #475569; }
             QPushButton:disabled { color: #64748b; background: #1e293b; border-color: #334155; }
             QPushButton#primary { color: #ffffff; background: #0284c7; border-color: #0284c7; }
             QPushButton#primary:hover { background: #0369a1; }
             QPushButton#danger { color: #ffffff; background: #dc2626; border-color: #dc2626; }
             QPushButton#danger:hover { background: #b91c1c; }
+            QPushButton#toggleEye { background: #1e293b; border: 1px solid #475569; padding: 4px 8px; }
             QTabWidget::pane { background: #1e293b; border: 1px solid #334155;
                                border-radius: 8px; top: -1px; }
             QTabBar::tab { background: #0f172a; color: #94a3b8; padding: 9px 18px; margin-right: 4px;
@@ -139,13 +205,23 @@ public:
             QTabBar::tab:selected { color: #38bdf8; background: #1e293b; font-weight: 700; border-bottom: none; }
             QTableWidget { background: #0f172a; border: 1px solid #334155; border-radius: 6px; gridline-color: #1e293b; color: #f8fafc; }
             QHeaderView::section { background: #1e293b; color: #94a3b8; font-weight: 700; border: 1px solid #334155; padding: 6px; }
+            QProgressBar { background: #1e293b; border-radius: 2px; border: none; }
+            QProgressBar::chunk { background: #38bdf8; border-radius: 2px; }
             QLabel#statusReady { color: #34d399; font-weight: 700; }
             QLabel#statusWarning { color: #fbbf24; font-weight: 700; }
-            QLabel#result { padding: 6px 2px; color: #38bdf8; font-weight: 500; }
-            QCheckBox { color: #e2e8f0; font-weight: 500; }
+            QLabel#result { padding: 4px 2px; color: #38bdf8; font-weight: 500; font-size: 13px; }
+            QCheckBox { color: #e2e8f0; font-weight: 500; spacing: 8px; }
+            QMenu { background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; padding: 4px; }
+            QMenu::item { padding: 6px 18px; border-radius: 4px; }
+            QMenu::item:selected { background: #0284c7; color: #ffffff; }
         )");
 
-        connect(m_vaultPath, &QLineEdit::editingFinished, this, [this] { refreshVaultState(); });
+        m_vaultPath->setText(lastVault);
+        connect(m_vaultPath, &QLineEdit::editingFinished, this, [this] {
+            QSettings s("KernelVault", "KernelVault");
+            s.setValue("lastVaultPath", m_vaultPath->text());
+            refreshVaultState();
+        });
         refreshVaultState();
     }
 
@@ -155,17 +231,56 @@ public:
         }
     }
 
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override {
+        if (event->mimeData()->hasUrls()) {
+            event->acceptProposedAction();
+        }
+    }
+
+    void dropEvent(QDropEvent* event) override {
+        const QList<QUrl> urls = event->mimeData()->urls();
+        if (urls.isEmpty()) return;
+
+        m_selectedFiles.clear();
+        bool hasDir = false;
+        for (const auto& u : urls) {
+            QString local = u.toLocalFile();
+            if (!local.isEmpty()) {
+                QFileInfo fi(local);
+                if (fi.isDir()) {
+                    hasDir = true;
+                }
+                m_selectedFiles.push_back(local.toStdString());
+            }
+        }
+        if (m_selectedFiles.empty()) return;
+
+        if (m_selectedFiles.size() == 1 && hasDir) {
+            m_isDirectoryMode = true;
+            m_encryptInput->setText(QString("[Directory] %1").arg(QString::fromStdString(m_selectedFiles[0])));
+        } else {
+            m_isDirectoryMode = false;
+            m_encryptInput->setText(QString("%1 file(s) dropped for encryption").arg(m_selectedFiles.size()));
+        }
+        m_tabs->setCurrentIndex(0);
+        m_encryptPassword->setFocus();
+    }
+
 private:
     QLineEdit* m_vaultPath{};
     QLabel* m_vaultState{};
     QLabel* m_engineState{};
     QPushButton* m_initializeButton{};
     QTabWidget* m_tabs{};
+    QProgressBar* m_progressBar{};
 
     // Encrypt tab controls
     QLineEdit* m_encryptInput{};
     QCheckBox* m_shredCheckbox{};
     QLineEdit* m_encryptPassword{};
+    QLineEdit* m_encryptConfirmPassword{};
+    QLabel* m_passMatchLabel{};
     QPushButton* m_encryptButton{};
     std::vector<std::string> m_selectedFiles;
     bool m_isDirectoryMode{false};
@@ -173,12 +288,18 @@ private:
     // Decrypt tab controls
     QComboBox* m_decryptRecord{};
     QLineEdit* m_decryptOutput{};
+    QLabel* m_collisionWarningLabel{};
+    QPushButton* m_autoRenameBtn{};
+    QCheckBox* m_decryptOverwriteCheckbox{};
     QLineEdit* m_decryptPassword{};
     QPushButton* m_decryptButton{};
+    QString m_destinationDir;
 
     // Inventory tab controls
+    QLineEdit* m_inventorySearch{};
     QTableWidget* m_inventoryTable{};
     QPushButton* m_verifyButton{};
+    QPushButton* m_decryptFromTableButton{};
     QPushButton* m_deleteButton{};
     QPushButton* m_auditAllButton{};
     QPushButton* m_refreshButton{};
@@ -187,18 +308,34 @@ private:
     QThread* m_worker{};
     bool m_vaultInitialized{false};
 
+    static QPushButton* createPasswordToggle(QLineEdit* lineEdit, QWidget* parent) {
+        auto* btn = new QPushButton("👁 Show", parent);
+        btn->setObjectName("toggleEye");
+        btn->setCheckable(true);
+        btn->setFixedWidth(80);
+        QObject::connect(btn, &QPushButton::toggled, lineEdit, [lineEdit, btn](bool checked) {
+            lineEdit->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
+            btn->setText(checked ? "🔒 Hide" : "👁 Show");
+        });
+        return btn;
+    }
+
     QWidget* buildVaultPanel(QWidget* parent) {
-        auto* group = new QGroupBox("1. Vault Storage", parent);
+        auto* group = new QGroupBox("Vault Storage Location", parent);
         auto* layout = new QVBoxLayout(group);
+        layout->setSpacing(8);
+
         auto* pathRow = new QHBoxLayout();
-        m_vaultPath = new QLineEdit(QDir::homePath() + "/kvault-vault", group);
-        m_vaultPath->setPlaceholderText("Vault directory path");
-        auto* browse = new QPushButton("Choose folder", group);
+        m_vaultPath = new QLineEdit(group);
+        m_vaultPath->setPlaceholderText("Vault directory path (e.g. ~/my_vault)");
+        auto* browse = new QPushButton("Browse Vault...", group);
         connect(browse, &QPushButton::clicked, this, [this] {
             const QString selected = QFileDialog::getExistingDirectory(
                 this, "Choose vault folder", m_vaultPath->text());
             if (!selected.isEmpty()) {
                 m_vaultPath->setText(selected);
+                QSettings s("KernelVault", "KernelVault");
+                s.setValue("lastVaultPath", selected);
                 refreshVaultState();
             }
         });
@@ -209,7 +346,7 @@ private:
         auto* stateRow = new QHBoxLayout();
         m_vaultState = new QLabel(group);
         m_engineState = new QLabel(group);
-        m_initializeButton = new QPushButton("Initialize vault", group);
+        m_initializeButton = new QPushButton("Initialize Vault (0700)", group);
         connect(m_initializeButton, &QPushButton::clicked, this, [this] { initializeVault(); });
         stateRow->addWidget(m_vaultState, 1);
         stateRow->addWidget(m_engineState, 1);
@@ -239,7 +376,7 @@ private:
         fileLayout->setContentsMargins(0, 0, 0, 0);
         m_encryptInput = new QLineEdit(fileRow);
         m_encryptInput->setReadOnly(true);
-        m_encryptInput->setPlaceholderText("Select files or folder to encrypt...");
+        m_encryptInput->setPlaceholderText("Select files, folder, or drag-and-drop here...");
 
         auto* chooseFiles = new QPushButton("Select Files...", fileRow);
         connect(chooseFiles, &QPushButton::clicked, this, [this] {
@@ -259,7 +396,7 @@ private:
                 m_selectedFiles.clear();
                 m_selectedFiles.push_back(dir.toStdString());
                 m_isDirectoryMode = true;
-                m_encryptInput->setText(QString("[Directory] %1").arg(dir));
+                m_encryptInput->setText(QString("[Directory Tree] %1").arg(dir));
             }
         });
 
@@ -268,24 +405,62 @@ private:
         fileLayout->addWidget(chooseFolder);
         form->addRow("Plaintext Source", fileRow);
 
-        m_encryptPassword = new QLineEdit(page);
+        // Passphrase row with show/hide toggle
+        auto* passRow = new QWidget(page);
+        auto* passLayout = new QHBoxLayout(passRow);
+        passLayout->setContentsMargins(0, 0, 0, 0);
+        m_encryptPassword = new QLineEdit(passRow);
         m_encryptPassword->setEchoMode(QLineEdit::Password);
-        m_encryptPassword->setPlaceholderText("Enter master passphrase");
-        form->addRow("Master Passphrase", m_encryptPassword);
+        m_encryptPassword->setPlaceholderText("Enter strong master passphrase");
+        auto* toggle1 = createPasswordToggle(m_encryptPassword, passRow);
+        passLayout->addWidget(m_encryptPassword, 1);
+        passLayout->addWidget(toggle1);
+        form->addRow("Master Passphrase", passRow);
 
-        m_shredCheckbox = new QCheckBox("Securely shred plaintext source file(s) after encryption (--shred)", page);
+        // Confirm Passphrase row
+        auto* confirmRow = new QWidget(page);
+        auto* confirmLayout = new QHBoxLayout(confirmRow);
+        confirmLayout->setContentsMargins(0, 0, 0, 0);
+        m_encryptConfirmPassword = new QLineEdit(confirmRow);
+        m_encryptConfirmPassword->setEchoMode(QLineEdit::Password);
+        m_encryptConfirmPassword->setPlaceholderText("Re-type passphrase to confirm");
+        auto* toggle2 = createPasswordToggle(m_encryptConfirmPassword, confirmRow);
+        confirmLayout->addWidget(m_encryptConfirmPassword, 1);
+        confirmLayout->addWidget(toggle2);
+        form->addRow("Confirm Passphrase", confirmRow);
+
+        m_passMatchLabel = new QLabel(page);
+        form->addRow("", m_passMatchLabel);
+
+        auto updateMatch = [this] {
+            const QString p1 = m_encryptPassword->text();
+            const QString p2 = m_encryptConfirmPassword->text();
+            if (p1.isEmpty() && p2.isEmpty()) {
+                m_passMatchLabel->setText("");
+            } else if (p1 == p2) {
+                m_passMatchLabel->setText("✓ Passphrases match");
+                m_passMatchLabel->setStyleSheet("color: #34d399; font-weight: 600; font-size: 12px;");
+            } else {
+                m_passMatchLabel->setText("✗ Passphrases do not match");
+                m_passMatchLabel->setStyleSheet("color: #ef4444; font-weight: 600; font-size: 12px;");
+            }
+        };
+        connect(m_encryptPassword, &QLineEdit::textChanged, this, updateMatch);
+        connect(m_encryptConfirmPassword, &QLineEdit::textChanged, this, updateMatch);
+
+        m_shredCheckbox = new QCheckBox("Anti-Forensics: Shred source file(s) with CSPRNG entropy after encryption (--shred)", page);
         form->addRow("", m_shredCheckbox);
 
         layout->addLayout(form);
 
         auto* note = new QLabel(
             "RFC 2898 Dual-Key PBKDF2 derives independent AES-256 and HMAC-SHA256 keys. "
-            "POSIX modes and timestamps are preserved inside the authenticated 96-byte header.", page);
+            "Original POSIX modes and modification timestamps are preserved inside the authenticated 96-byte header.", page);
         note->setObjectName("muted");
         note->setWordWrap(true);
         layout->addWidget(note);
 
-        m_encryptButton = new QPushButton("Encrypt and Store", page);
+        m_encryptButton = new QPushButton("Encrypt and Store in Vault", page);
         m_encryptButton->setObjectName("primary");
         connect(m_encryptButton, &QPushButton::clicked, this, [this] { encryptSelectedFiles(); });
         layout->addWidget(m_encryptButton, 0, Qt::AlignLeft);
@@ -301,50 +476,101 @@ private:
 
         auto* form = new QFormLayout();
         m_decryptRecord = new QComboBox(page);
+        connect(m_decryptRecord, &QComboBox::currentIndexChanged, this, [this](int) {
+            updateDecryptTargetPath();
+        });
         form->addRow("Protected Record", m_decryptRecord);
 
+        // Destination Path Row with Folder Browser and Save As
         auto* outputRow = new QWidget(page);
         auto* outputLayout = new QHBoxLayout(outputRow);
         outputLayout->setContentsMargins(0, 0, 0, 0);
         m_decryptOutput = new QLineEdit(outputRow);
-        m_decryptOutput->setPlaceholderText("Restored file or directory path...");
-        auto* chooseOutput = new QPushButton("Save As...", outputRow);
-        connect(chooseOutput, &QPushButton::clicked, this, [this] {
-            QString suggested = QDir::homePath() + "/restored";
-            if (m_decryptRecord->currentIndex() >= 0) {
-                QString rec = m_decryptRecord->currentText();
-                if (rec.endsWith(".kvdir")) {
-                    suggested = QDir::homePath() + "/" + rec.left(rec.size() - 6);
-                    const QString sel = QFileDialog::getExistingDirectory(this, "Choose destination directory", suggested);
-                    if (!sel.isEmpty()) m_decryptOutput->setText(sel);
-                    return;
-                }
-                suggested = QDir::homePath() + "/" + rec;
+        m_decryptOutput->setPlaceholderText("Auto-populated destination path...");
+        connect(m_decryptOutput, &QLineEdit::textChanged, this, [this](const QString&) {
+            updateCollisionWarning();
+        });
+
+        auto* chooseFolderBtn = new QPushButton("Choose Folder...", outputRow);
+        chooseFolderBtn->setToolTip("Select destination directory (preserves auto-filled filename)");
+        connect(chooseFolderBtn, &QPushButton::clicked, this, [this] {
+            const QString sel = QFileDialog::getExistingDirectory(
+                this, "Choose Destination Directory", m_destinationDir);
+            if (!sel.isEmpty()) {
+                m_destinationDir = sel;
+                QSettings s("KernelVault", "KernelVault");
+                s.setValue("lastDestinationDir", m_destinationDir);
+                updateDecryptTargetPath();
+            }
+        });
+
+        auto* saveAsBtn = new QPushButton("Save As File...", outputRow);
+        connect(saveAsBtn, &QPushButton::clicked, this, [this] {
+            QString suggested = m_decryptOutput->text().trimmed();
+            if (suggested.isEmpty()) {
+                suggested = m_destinationDir + "/restored";
             }
             const QString selected = QFileDialog::getSaveFileName(this, "Choose destination path", suggested);
             if (!selected.isEmpty()) {
+                m_destinationDir = QFileInfo(selected).absolutePath();
+                QSettings s("KernelVault", "KernelVault");
+                s.setValue("lastDestinationDir", m_destinationDir);
                 m_decryptOutput->setText(selected);
+                updateCollisionWarning();
             }
         });
+
         outputLayout->addWidget(m_decryptOutput, 1);
-        outputLayout->addWidget(chooseOutput);
+        outputLayout->addWidget(chooseFolderBtn);
+        outputLayout->addWidget(saveAsBtn);
         form->addRow("Restoration Target", outputRow);
 
-        m_decryptPassword = new QLineEdit(page);
+        // Collision safety status line
+        auto* collisionRow = new QWidget(page);
+        auto* collisionLayout = new QHBoxLayout(collisionRow);
+        collisionLayout->setContentsMargins(0, 0, 0, 0);
+        m_collisionWarningLabel = new QLabel(collisionRow);
+        m_autoRenameBtn = new QPushButton("Auto-Rename (1)", collisionRow);
+        m_autoRenameBtn->setToolTip("Automatically add numeric suffix to avoid overwriting existing file");
+        m_autoRenameBtn->setVisible(false);
+        connect(m_autoRenameBtn, &QPushButton::clicked, this, [this] {
+            m_decryptOutput->setText(generateNonCollidingPath(m_decryptOutput->text()));
+            updateCollisionWarning();
+        });
+        collisionLayout->addWidget(m_collisionWarningLabel);
+        collisionLayout->addWidget(m_autoRenameBtn);
+        collisionLayout->addStretch(1);
+        form->addRow("", collisionRow);
+
+        m_decryptOverwriteCheckbox = new QCheckBox("Allow overwriting existing files / folders at destination", page);
+        connect(m_decryptOverwriteCheckbox, &QCheckBox::toggled, this, [this](bool) {
+            updateCollisionWarning();
+        });
+        form->addRow("", m_decryptOverwriteCheckbox);
+
+        // Decrypt Passphrase row
+        auto* decPassRow = new QWidget(page);
+        auto* decPassLayout = new QHBoxLayout(decPassRow);
+        decPassLayout->setContentsMargins(0, 0, 0, 0);
+        m_decryptPassword = new QLineEdit(decPassRow);
         m_decryptPassword->setEchoMode(QLineEdit::Password);
-        m_decryptPassword->setPlaceholderText("Enter the passphrase used for encryption");
-        form->addRow("Master Passphrase", m_decryptPassword);
+        m_decryptPassword->setPlaceholderText("Enter the master passphrase used for encryption");
+        auto* toggleDec = createPasswordToggle(m_decryptPassword, decPassRow);
+        decPassLayout->addWidget(m_decryptPassword, 1);
+        decPassLayout->addWidget(toggleDec);
+        form->addRow("Master Passphrase", decPassRow);
+
         layout->addLayout(form);
 
         auto* note = new QLabel(
-            "KernelVault verifies the streaming HMAC-SHA256 before any plaintext is committed to disk. "
-            "Permissions and timestamps are restored automatically.", page);
+            "KernelVault authenticates the streaming HMAC-SHA256 signature before committing any plaintext to disk. "
+            "Original POSIX permissions and timestamps are restored automatically.", page);
         note->setObjectName("muted");
         note->setWordWrap(true);
         layout->addWidget(note);
 
         auto* btnRow = new QHBoxLayout();
-        m_decryptButton = new QPushButton("Verify and Restore Record", page);
+        m_decryptButton = new QPushButton("Verify HMAC and Restore Record", page);
         m_decryptButton->setObjectName("primary");
         connect(m_decryptButton, &QPushButton::clicked, this, [this] { decryptSelectedRecord(); });
 
@@ -363,29 +589,100 @@ private:
         auto* page = new QWidget(parent);
         auto* layout = new QVBoxLayout(page);
         layout->setContentsMargins(18, 16, 18, 16);
-        layout->setSpacing(12);
+        layout->setSpacing(10);
+
+        // Real-time Search / Filter bar
+        auto* searchRow = new QHBoxLayout();
+        auto* searchLabel = new QLabel("Filter Records:", page);
+        searchLabel->setObjectName("muted");
+        m_inventorySearch = new QLineEdit(page);
+        m_inventorySearch->setPlaceholderText("Search by record name, extension, date, or status...");
+        m_inventorySearch->setClearButtonEnabled(true);
+        connect(m_inventorySearch, &QLineEdit::textChanged, this, [this](const QString& text) {
+            const QString query = text.trimmed().toLower();
+            for (int r = 0; r < m_inventoryTable->rowCount(); ++r) {
+                bool match = query.isEmpty();
+                if (!match) {
+                    for (int c = 0; c < m_inventoryTable->columnCount(); ++c) {
+                        auto* item = m_inventoryTable->item(r, c);
+                        if (item && item->text().toLower().contains(query)) {
+                            match = true;
+                            break;
+                        }
+                    }
+                }
+                m_inventoryTable->setRowHidden(r, !match);
+            }
+        });
+        searchRow->addWidget(searchLabel);
+        searchRow->addWidget(m_inventorySearch, 1);
+        layout->addLayout(searchRow);
 
         m_inventoryTable = new QTableWidget(page);
         m_inventoryTable->setColumnCount(7);
         m_inventoryTable->setHorizontalHeaderLabels({
-            "Record Name", "Version", "Plaintext Size", "Vault Size", "Permissions", "Modified", "Status"
+            "Record Name", "Version", "Plaintext Size", "Vault Size", "POSIX Mode", "Last Modified", "Status"
         });
         m_inventoryTable->horizontalHeader()->setStretchLastSection(true);
         m_inventoryTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         m_inventoryTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_inventoryTable->setSelectionMode(QAbstractItemView::SingleSelection);
         m_inventoryTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_inventoryTable->setContextMenuPolicy(Qt::CustomContextMenu);
+
         connect(m_inventoryTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int /*col*/) {
             if (row >= 0 && row < m_inventoryTable->rowCount()) {
                 QString name = m_inventoryTable->item(row, 0)->text();
-                m_decryptRecord->setCurrentText(name);
-                m_tabs->setCurrentIndex(1);
+                selectRecordForDecryption(name);
             }
         });
+
+        connect(m_inventoryTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+            int row = m_inventoryTable->rowAt(pos.y());
+            if (row < 0) return;
+            m_inventoryTable->selectRow(row);
+            QString recName = m_inventoryTable->item(row, 0)->text();
+
+            QMenu menu(this);
+            auto* decryptAct = menu.addAction(QString("Decrypt '%1'...").arg(recName));
+            auto* verifyAct = menu.addAction("Verify Cryptographic HMAC");
+            menu.addSeparator();
+            auto* copyNameAct = menu.addAction("Copy Record Name");
+            menu.addSeparator();
+            auto* deleteAct = menu.addAction(QString("Delete Record..."));
+
+            connect(decryptAct, &QAction::triggered, this, [this, recName] {
+                selectRecordForDecryption(recName);
+            });
+            connect(verifyAct, &QAction::triggered, this, [this] {
+                verifySelectedRecord();
+            });
+            connect(copyNameAct, &QAction::triggered, this, [this, recName] {
+                QGuiApplication::clipboard()->setText(recName);
+                m_resultLabel->setText(QString("Copied to clipboard: %1").arg(recName));
+            });
+            connect(deleteAct, &QAction::triggered, this, [this] {
+                deleteSelectedRecord();
+            });
+
+            menu.exec(m_inventoryTable->viewport()->mapToGlobal(pos));
+        });
+
         layout->addWidget(m_inventoryTable, 1);
 
         auto* btnRow = new QHBoxLayout();
-        m_verifyButton = new QPushButton("Verify Integrity (HMAC)", page);
+        m_decryptFromTableButton = new QPushButton("Restore Selected Record...", page);
+        m_decryptFromTableButton->setObjectName("primary");
+        connect(m_decryptFromTableButton, &QPushButton::clicked, this, [this] {
+            int row = m_inventoryTable->currentRow();
+            if (row >= 0) {
+                selectRecordForDecryption(m_inventoryTable->item(row, 0)->text());
+            } else {
+                QMessageBox::information(this, "Select Record", "Please select a record from the table first.");
+            }
+        });
+
+        m_verifyButton = new QPushButton("Audit Selected HMAC", page);
         connect(m_verifyButton, &QPushButton::clicked, this, [this] { verifySelectedRecord(); });
 
         m_auditAllButton = new QPushButton("Audit All Records", page);
@@ -395,9 +692,10 @@ private:
         m_deleteButton->setObjectName("danger");
         connect(m_deleteButton, &QPushButton::clicked, this, [this] { deleteSelectedRecord(); });
 
-        m_refreshButton = new QPushButton("Refresh", page);
+        m_refreshButton = new QPushButton("Refresh Table", page);
         connect(m_refreshButton, &QPushButton::clicked, this, [this] { refreshVaultState(); });
 
+        btnRow->addWidget(m_decryptFromTableButton);
         btnRow->addWidget(m_verifyButton);
         btnRow->addWidget(m_auditAllButton);
         btnRow->addWidget(m_deleteButton);
@@ -406,6 +704,75 @@ private:
         layout->addLayout(btnRow);
 
         return page;
+    }
+
+    void selectRecordForDecryption(const QString& recName) {
+        int idx = m_decryptRecord->findText(recName);
+        if (idx >= 0) {
+            m_decryptRecord->setCurrentIndex(idx);
+        }
+        updateDecryptTargetPath();
+        m_tabs->setCurrentIndex(1); // Switch to Decrypt Tab
+        m_decryptPassword->setFocus();
+    }
+
+    void updateDecryptTargetPath() {
+        if (m_decryptRecord == nullptr || m_decryptOutput == nullptr) return;
+
+        if (m_decryptRecord->currentIndex() < 0 || !m_decryptRecord->isEnabled()) {
+            m_decryptOutput->clear();
+            updateCollisionWarning();
+            return;
+        }
+
+        const QString rec = m_decryptRecord->currentText().trimmed();
+        if (rec.isEmpty() || rec == "No protected records yet") {
+            m_decryptOutput->clear();
+            updateCollisionWarning();
+            return;
+        }
+
+        QString defaultName = rec;
+        if (rec.endsWith(".kvdir")) {
+            defaultName = rec.left(rec.size() - 6);
+        }
+
+        QString candidate = m_destinationDir + "/" + defaultName;
+        if (QFileInfo::exists(candidate) && (!m_decryptOverwriteCheckbox || !m_decryptOverwriteCheckbox->isChecked())) {
+            candidate = generateNonCollidingPath(candidate);
+        }
+        m_decryptOutput->setText(candidate);
+        updateCollisionWarning();
+    }
+
+    void updateCollisionWarning() {
+        if (m_collisionWarningLabel == nullptr || m_decryptOutput == nullptr) return;
+
+        const QString path = m_decryptOutput->text().trimmed();
+        if (path.isEmpty()) {
+            m_collisionWarningLabel->setText("");
+            m_collisionWarningLabel->setVisible(false);
+            if (m_autoRenameBtn != nullptr) m_autoRenameBtn->setVisible(false);
+            return;
+        }
+
+        if (QFileInfo::exists(path)) {
+            const bool allowOverwrite = (m_decryptOverwriteCheckbox != nullptr && m_decryptOverwriteCheckbox->isChecked());
+            if (allowOverwrite) {
+                m_collisionWarningLabel->setText("⚠️ Destination exists · Will overwrite existing file on commit");
+                m_collisionWarningLabel->setStyleSheet("color: #fbbf24; font-weight: 600;");
+            } else {
+                m_collisionWarningLabel->setText("⚠️ Conflict: Destination already exists! Auto-rename recommended.");
+                m_collisionWarningLabel->setStyleSheet("color: #ef4444; font-weight: 600;");
+            }
+            m_collisionWarningLabel->setVisible(true);
+            if (m_autoRenameBtn != nullptr) m_autoRenameBtn->setVisible(true);
+        } else {
+            m_collisionWarningLabel->setText("✓ Destination path is available (no existing file will be overwritten)");
+            m_collisionWarningLabel->setStyleSheet("color: #34d399; font-weight: 500;");
+            m_collisionWarningLabel->setVisible(true);
+            if (m_autoRenameBtn != nullptr) m_autoRenameBtn->setVisible(false);
+        }
     }
 
     void refreshVaultState() {
@@ -427,6 +794,8 @@ private:
                 : "Driver: Inactive · Software Fallback");
             m_initializeButton->setEnabled(!m_vaultInitialized);
 
+            QString previousSelected = m_decryptRecord->currentText();
+            m_decryptRecord->blockSignals(true);
             m_decryptRecord->clear();
             for (const std::string& name : status.stored_files) {
                 m_decryptRecord->addItem(QString::fromStdString(name));
@@ -436,7 +805,14 @@ private:
                 m_decryptRecord->setEnabled(false);
             } else {
                 m_decryptRecord->setEnabled(true);
+                int foundIdx = m_decryptRecord->findText(previousSelected);
+                if (foundIdx >= 0) {
+                    m_decryptRecord->setCurrentIndex(foundIdx);
+                }
             }
+            m_decryptRecord->blockSignals(false);
+            updateDecryptTargetPath();
+
             m_decryptButton->setEnabled(m_vaultInitialized && !status.stored_files.empty());
             m_encryptButton->setEnabled(m_vaultInitialized);
 
@@ -476,7 +852,7 @@ private:
             return;
         }
         if (QMessageBox::question(this, "Initialize vault",
-                "Create the secure vault directory and metadata at this location?\n\n" + m_vaultPath->text())
+                "Create the secure vault directory (mode 0700) and metadata at this location?\n\n" + m_vaultPath->text())
             != QMessageBox::Yes) {
             return;
         }
@@ -486,7 +862,7 @@ private:
                 kvault::VaultManager vault(vaultPath);
                 return vault.initializeVault()
                     ? QString("Vault initialized and ready at %1").arg(QString::fromStdString(vaultPath.string()))
-                    : QString("Could not initialize the vault. Check the selected path and permissions.");
+                    : QString("Could not initialize the vault. Check permissions and storage paths.");
             } catch (const std::exception& error) {
                 return QString("Vault initialization failed: %1").arg(QString::fromUtf8(error.what()));
             }
@@ -495,17 +871,46 @@ private:
 
     void encryptSelectedFiles() {
         if (m_selectedFiles.empty() || m_encryptPassword->text().isEmpty()) {
-            QMessageBox::warning(this, "Missing information", "Select files or folder and enter a passphrase.");
+            QMessageBox::warning(this, "Missing Information", "Please select files or folder and enter a master passphrase.");
             return;
         }
+        if (m_encryptPassword->text() != m_encryptConfirmPassword->text()) {
+            QMessageBox::warning(this, "Passphrase Mismatch", "The master passphrase and confirmation passphrase do not match. Please verify.");
+            return;
+        }
+
+        // Vault Collision Check
+        try {
+            kvault::VaultManager vault(toPath(m_vaultPath->text()));
+            auto status = vault.inspectStatus();
+            QStringList conflicts;
+            for (const auto& f : m_selectedFiles) {
+                std::filesystem::path p(f);
+                std::string recName = m_isDirectoryMode ? (p.filename().string() + ".kvdir") : p.filename().string();
+                if (std::find(status.stored_files.begin(), status.stored_files.end(), recName) != status.stored_files.end()) {
+                    conflicts.append(QString::fromStdString(recName));
+                }
+            }
+            if (!conflicts.isEmpty()) {
+                if (QMessageBox::question(this, "Record Already Exists in Vault",
+                        QString("The following record(s) already exist inside the vault:\n\n• %1\n\nDo you want to overwrite and replace them?")
+                            .arg(conflicts.join("\n• ")),
+                        QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
+                    return;
+                }
+            }
+        } catch (...) {}
+
         std::string secret = m_encryptPassword->text().toUtf8().toStdString();
         m_encryptPassword->clear();
+        m_encryptConfirmPassword->clear();
+        m_passMatchLabel->setText("");
         const auto vaultPath = toPath(m_vaultPath->text());
         const auto files = m_selectedFiles;
         const bool isDir = m_isDirectoryMode;
         const bool shred = m_shredCheckbox->isChecked();
 
-        runTask("Encrypting and authenticating...", [vaultPath, files, isDir, shred, secret = std::move(secret)]() mutable {
+        runTask("Deriving RFC 2898 dual keys & encrypting...", [vaultPath, files, isDir, shred, secret = std::move(secret)]() mutable {
             try {
                 kvault::VaultManager vault(vaultPath);
                 size_t success = 0;
@@ -531,7 +936,7 @@ private:
                 }
 
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
-                return QString("Encryption complete: %1 succeeded, %2 failed.")
+                return QString("Encryption complete: %1 record(s) stored successfully (%2 failed).")
                     .arg(success).arg(fail);
             } catch (const std::exception& error) {
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
@@ -543,17 +948,41 @@ private:
     void decryptSelectedRecord() {
         if (m_decryptRecord->currentIndex() < 0 || !m_decryptRecord->isEnabled() ||
             m_decryptOutput->text().trimmed().isEmpty() || m_decryptPassword->text().isEmpty()) {
-            QMessageBox::warning(this, "Missing information",
-                "Choose a protected record, an output path, and enter its passphrase.");
+            QMessageBox::warning(this, "Missing Information",
+                "Please choose a protected record, verify output path, and enter the master passphrase.");
             return;
         }
+
+        QString targetStr = m_decryptOutput->text().trimmed();
+
+        // Destination Collision Check
+        if (QFileInfo::exists(targetStr) && (!m_decryptOverwriteCheckbox || !m_decryptOverwriteCheckbox->isChecked())) {
+            QMessageBox msgBox(this);
+            msgBox.setWindowTitle("Destination Already Exists");
+            msgBox.setText(QString("The destination already exists on disk:\n\n%1\n\nHow would you like to proceed?").arg(targetStr));
+            msgBox.setIcon(QMessageBox::Warning);
+            auto* renameBtn = msgBox.addButton("Auto-Rename (Safe)", QMessageBox::AcceptRole);
+            msgBox.addButton("Overwrite", QMessageBox::DestructiveRole);
+            auto* cancelBtn = msgBox.addButton("Cancel", QMessageBox::RejectRole);
+            msgBox.setDefaultButton(renameBtn);
+            msgBox.exec();
+
+            if (msgBox.clickedButton() == cancelBtn) {
+                return;
+            }
+            if (msgBox.clickedButton() == renameBtn) {
+                targetStr = generateNonCollidingPath(targetStr);
+                m_decryptOutput->setText(targetStr);
+            }
+        }
+
         const std::string record = m_decryptRecord->currentText().toStdString();
         const auto vaultPath = toPath(m_vaultPath->text());
-        const auto outputPath = toPath(m_decryptOutput->text());
+        const auto outputPath = toPath(targetStr);
         std::string secret = m_decryptPassword->text().toUtf8().toStdString();
         m_decryptPassword->clear();
 
-        runTask("Verifying record HMAC, then restoring...", [vaultPath, outputPath, record, secret = std::move(secret)]() mutable {
+        runTask("Verifying cryptographic HMAC, then restoring...", [vaultPath, outputPath, record, secret = std::move(secret)]() mutable {
             try {
                 kvault::VaultManager vault(vaultPath);
                 bool success = false;
@@ -564,8 +993,8 @@ private:
                 }
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
                 return success
-                    ? QString("Record authenticated and restored to %1").arg(QString::fromStdString(outputPath.string()))
-                    : QString("Restore failed: Incorrect passphrase or damaged record.");
+                    ? QString("✓ Record authenticated & restored to: %1").arg(QString::fromStdString(outputPath.string()))
+                    : QString("✗ Restore failed: Incorrect passphrase or damaged/tampered record.");
             } catch (const std::exception& error) {
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
                 return QString("Restore failed: %1").arg(QString::fromUtf8(error.what()));
@@ -574,8 +1003,13 @@ private:
     }
 
     void decryptAllRecordsToFolder() {
-        const QString dest = QFileDialog::getExistingDirectory(this, "Choose folder to restore all records into");
+        const QString dest = QFileDialog::getExistingDirectory(
+            this, "Choose Destination Directory for All Records", m_destinationDir);
         if (dest.isEmpty()) return;
+
+        m_destinationDir = dest;
+        QSettings s("KernelVault", "KernelVault");
+        s.setValue("lastDestinationDir", m_destinationDir);
 
         bool ok = false;
         QString pass = QInputDialog::getText(this, "Restore All Records",
@@ -587,7 +1021,7 @@ private:
         const auto vaultPath = toPath(m_vaultPath->text());
         const auto outDir = toPath(dest);
 
-        runTask("Restoring all vault records...", [vaultPath, outDir, secret = std::move(secret)]() mutable {
+        runTask("Authenticating and restoring all vault records...", [vaultPath, outDir, secret = std::move(secret)]() mutable {
             try {
                 kvault::VaultManager vault(vaultPath);
                 auto records = vault.listRecords();
@@ -606,7 +1040,7 @@ private:
                 }
 
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
-                return QString("Restored %1 record(s) successfully (%2 failed) to %3")
+                return QString("Batch Restore Complete: %1 succeeded, %2 failed in %3")
                     .arg(success).arg(failed).arg(QString::fromStdString(outDir.string()));
             } catch (const std::exception& error) {
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
@@ -623,7 +1057,7 @@ private:
         }
         QString recName = m_inventoryTable->item(row, 0)->text();
         bool ok = false;
-        QString pass = QInputDialog::getText(this, "Verify Record",
+        QString pass = QInputDialog::getText(this, "Verify Record Integrity",
             QString("Enter passphrase for record '%1':").arg(recName),
             QLineEdit::Password, "", &ok);
         if (!ok || pass.isEmpty()) return;
@@ -657,7 +1091,7 @@ private:
         std::string secret = pass.toUtf8().toStdString();
         const auto vaultPath = toPath(m_vaultPath->text());
 
-        runTask("Auditing all records in vault...", [vaultPath, secret = std::move(secret)]() mutable {
+        runTask("Auditing cryptographic HMAC signatures for all records...", [vaultPath, secret = std::move(secret)]() mutable {
             try {
                 kvault::VaultManager vault(vaultPath);
                 auto records = vault.listRecords();
@@ -671,7 +1105,7 @@ private:
                     }
                 }
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
-                return QString("Audit Complete: %1 verified OK, %2 failed.").arg(passed).arg(failed);
+                return QString("Cryptographic Audit Complete: %1 passed HMAC check, %2 failed.").arg(passed).arg(failed);
             } catch (const std::exception& error) {
                 kvault::KeyDerivation::secureZero(secret.data(), secret.size());
                 return QString("Audit error: %1").arg(QString::fromUtf8(error.what()));
@@ -687,7 +1121,7 @@ private:
         }
         QString recName = m_inventoryTable->item(row, 0)->text();
         if (QMessageBox::question(this, "Confirm Deletion",
-                QString("Permanently delete vault record '%1'?").arg(recName),
+                QString("Permanently delete vault record '%1'?\nThis action cannot be undone.").arg(recName),
                 QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
             return;
         }
@@ -734,6 +1168,7 @@ private:
         m_vaultPath->setEnabled(!busy);
         m_initializeButton->setEnabled(!busy && !m_vaultInitialized);
         m_tabs->setEnabled(!busy);
+        m_progressBar->setVisible(busy);
         if (busy) {
             m_vaultState->setText("Operation in progress…");
         }

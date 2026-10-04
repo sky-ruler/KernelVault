@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.1] - 2026-10-04
 
+### Added
+- **Native GUI Quality-of-Life Suite:**
+  - **Smart Destination Path Resolution:** Auto-populates the target restoration path with the record's decrypted filename/foldername whenever a protected record is selected or the destination directory changes.
+  - **Collision Prevention & Auto-Rename:** Real-time disk conflict detection with non-colliding numeric suffixing (`(1)`, `(2)`), overwrite guard checkboxes, and interactive safety dialogues.
+  - **Vault Record Conflict Guards:** Verifies whether plaintext files or folder archives already exist inside the vault before encryption, preventing accidental clobbering.
+  - **Passphrase Usability & Verification:** Eye toggle buttons (`Show / Hide`) on all password inputs plus a real-time Passphrase Match confirmation indicator.
+  - **Live Inventory Search & Filter:** Instant real-time filtering bar across records, versions, sizes, POSIX modes, and status.
+  - **Table Context Menus:** Right-click context actions to restore, verify HMAC integrity, copy record names, or delete records.
+  - **Drag-and-Drop Ingestion:** Dropping files or directories into KernelVault automatically stages them for encryption.
+  - **Persistent Vault & Destination Memory:** Remembers last-opened vault and restoration directories across sessions via `QSettings`.
+  - **Visual Indeterminate Progress Marquee:** Animated progress bar during intensive RFC 2898 key derivation and large-file streaming.
+
 ### Fixed
 - **Packaging Dependencies:** Added `libqt6widgets6 | libqt6widgets6t64` to `CPACK_DEBIAN_PACKAGE_DEPENDS` so that installing the `.deb` package automatically pulls in the Qt6 runtime libraries required by `kvault-gui`.
 - **Desktop Entry Categories:** Standardized `packaging/kvault.desktop` categories to `Utility;Security;System;` strictly adhering to the FreeDesktop specification.
