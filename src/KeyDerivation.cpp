@@ -383,13 +383,14 @@ bool computePbkdf2Block(std::span<const uint8_t> passBytes,
                         uint32_t blockIndex,
                         uint32_t iterations,
                         std::span<uint8_t, 32> outBlock) {
-    std::vector<uint8_t> saltPlusIndex;
-    saltPlusIndex.reserve(salt.size() + 4);
-    saltPlusIndex.insert(saltPlusIndex.end(), salt.begin(), salt.end());
-    saltPlusIndex.push_back(static_cast<uint8_t>((blockIndex >> 24) & 0xFF));
-    saltPlusIndex.push_back(static_cast<uint8_t>((blockIndex >> 16) & 0xFF));
-    saltPlusIndex.push_back(static_cast<uint8_t>((blockIndex >> 8) & 0xFF));
-    saltPlusIndex.push_back(static_cast<uint8_t>(blockIndex & 0xFF));
+    std::vector<uint8_t> saltPlusIndex(salt.size() + 4);
+    if (!salt.empty()) {
+        std::memcpy(saltPlusIndex.data(), salt.data(), salt.size());
+    }
+    saltPlusIndex[salt.size() + 0] = static_cast<uint8_t>((blockIndex >> 24) & 0xFF);
+    saltPlusIndex[salt.size() + 1] = static_cast<uint8_t>((blockIndex >> 16) & 0xFF);
+    saltPlusIndex[salt.size() + 2] = static_cast<uint8_t>((blockIndex >> 8) & 0xFF);
+    saltPlusIndex[salt.size() + 3] = static_cast<uint8_t>(blockIndex & 0xFF);
 
     std::array<uint8_t, 32> u_prev{};
     std::array<uint8_t, 32> u_curr{};

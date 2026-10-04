@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.1] - 2026-10-04
+
+### Fixed
+- **Packaging Dependencies:** Added `libqt6widgets6 | libqt6widgets6t64` to `CPACK_DEBIAN_PACKAGE_DEPENDS` so that installing the `.deb` package automatically pulls in the Qt6 runtime libraries required by `kvault-gui`.
+- **Desktop Entry Categories:** Standardized `packaging/kvault.desktop` categories to `Utility;Security;System;` strictly adhering to the FreeDesktop specification.
+- **Compiler Warning Guard:** Prevented GCC 15 `-Wfree-nonheap-object` false positive during PBKDF2 salt vector construction.
+
 ## [3.0.0] - 2026-10-04
 
 ### Added
