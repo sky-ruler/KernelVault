@@ -118,6 +118,15 @@ QString generateNonCollidingPath(const QString& targetPath) {
 
 class MainWindow final : public QMainWindow {
 public:
+    /**
+     * @brief Constructs the main KernelVault desktop application window.
+     *
+     * Initializes window dimensions, dark-mode enterprise palette and styling,
+     * drag-and-drop file reception, and persistent QSettings configuration.
+     * Restores the user's previously opened vault folder and restoration paths,
+     * builds the header, vault control bar, multi-tab interface, progress indicators,
+     * and status output console.
+     */
     MainWindow() {
         setWindowTitle("KernelVault - Secure Linux Storage");
         setMinimumSize(960, 720);
@@ -363,6 +372,14 @@ private:
         return m_tabs;
     }
 
+    /**
+     * @brief Constructs the encryption tab interface for securing files and directory archives.
+     *
+     * @param parent Parent widget container hosting the tab page.
+     * @return QWidget* Fully configured widget containing file pickers, directory selectors,
+     *                  source shredding toggles, passphrase inputs with show/hide eye toggles,
+     *                  real-time confirmation match badge, and encryption trigger buttons.
+     */
     QWidget* buildEncryptTab(QWidget* parent) {
         auto* page = new QWidget(parent);
         auto* layout = new QVBoxLayout(page);
@@ -468,6 +485,14 @@ private:
         return page;
     }
 
+    /**
+     * @brief Constructs the decryption tab interface with auto-updating destination paths and collision safety.
+     *
+     * @param parent Parent widget container hosting the tab page.
+     * @return QWidget* Fully configured widget containing record dropdown, destination pickers,
+     *                  collision detection warning banners, inline auto-rename buttons, overwrite toggles,
+     *                  passphrase input, and decryption execution buttons.
+     */
     QWidget* buildDecryptTab(QWidget* parent) {
         auto* page = new QWidget(parent);
         auto* layout = new QVBoxLayout(page);
@@ -585,6 +610,13 @@ private:
         return page;
     }
 
+    /**
+     * @brief Constructs the vault inventory management and cryptographic audit interface.
+     *
+     * @param parent Parent widget container hosting the tab page.
+     * @return QWidget* Fully configured widget hosting the real-time record filter bar,
+     *                  tabular inventory view, contextual right-click actions, and audit controls.
+     */
     QWidget* buildInventoryTab(QWidget* parent) {
         auto* page = new QWidget(parent);
         auto* layout = new QVBoxLayout(page);

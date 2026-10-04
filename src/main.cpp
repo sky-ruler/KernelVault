@@ -187,6 +187,17 @@ void printUsage(const char* prog) {
 
 } // namespace
 
+/**
+ * @brief Main entrypoint for the KernelVault command-line interface.
+ *
+ * @param argc Number of command-line arguments provided in argv.
+ * @param argv Array of null-terminated command-line argument strings.
+ * @return int Process exit code (0 for success, non-zero for operational errors).
+ *
+ * @details Validates and executes vault commands ('init', 'encrypt', 'decrypt',
+ * 'list', 'verify', 'rm', 'status', 'bench'). Handles batch files, directory archiving,
+ * and immediate memory scrubbing of credentials from argv.
+ */
 int main(int argc, char* argv[]) {
     installSignalHandlers();
 
@@ -216,7 +227,8 @@ int main(int argc, char* argv[]) {
     size_t benchSizeMb = 16;
     bool verbose = false;
 
-    for (int i = 2; i < argc; ++i) {
+    int i = 2;
+    while (i < argc) {
         std::string_view arg = argv[i];
         if (arg == "--vault" && i + 1 < argc) {
             vaultPath = argv[++i];
@@ -252,6 +264,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--verbose" || arg == "-v") {
             verbose = true;
         }
+        ++i;
     }
 
     if (key.empty()) {

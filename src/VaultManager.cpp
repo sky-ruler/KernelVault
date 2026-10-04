@@ -29,12 +29,18 @@ bool isValidVaultFilename(std::string_view filename) {
     if (filename.empty() || filename == "." || filename == "..") {
         return false;
     }
+    if (filename.find('/') != std::string_view::npos ||
+        filename.find('\\') != std::string_view::npos ||
+        filename.find("..") != std::string_view::npos ||
+        filename.find('\0') != std::string_view::npos) {
+        return false;
+    }
     for (char c : filename) {
-        if (c == '/' || c == '\\' || c == '\0') {
+        if (static_cast<unsigned char>(c) < 32 || c == 127) {
             return false;
         }
     }
-    return true;
+    return std::filesystem::path(filename).filename().string() == filename;
 }
 
 // ============================================================================
@@ -432,11 +438,21 @@ bool VaultManager::transformBuffer(int devFd,
 }
 
 std::filesystem::path VaultManager::getLockFilePath(const std::string& filename) const {
-    return m_locksPath / (filename + ".lock");
+    std::filesystem::path leaf = std::filesystem::path(filename).filename();
+    std::string safeName = leaf.string();
+    if (!isValidVaultFilename(safeName) || safeName.find("..") != std::string::npos || safeName.find('/') != std::string::npos) {
+        safeName = "invalid";
+    }
+    return (m_locksPath / (safeName + ".lock")).lexically_normal();
 }
 
 std::filesystem::path VaultManager::getRecordFilePath(const std::string& filename) const {
-    return m_recordsPath / (filename + ".enc");
+    std::filesystem::path leaf = std::filesystem::path(filename).filename();
+    std::string safeName = leaf.string();
+    if (!isValidVaultFilename(safeName) || safeName.find("..") != std::string::npos || safeName.find('/') != std::string::npos) {
+        safeName = "invalid";
+    }
+    return (m_recordsPath / (safeName + ".enc")).lexically_normal();
 }
 
 bool VaultManager::encryptFile(const std::filesystem::path& srcFile, std::string_view passphrase) {
@@ -451,13 +467,17 @@ bool VaultManager::encryptFile(const std::filesystem::path& srcFile, std::string
     }
 
     const std::string filename = srcFile.filename().string();
-    if (!isValidVaultFilename(filename)) {
+    if (!isValidVaultFilename(filename) || filename.find("..") != std::string::npos || filename.find('/') != std::string::npos) {
         Logger::error("Invalid or prohibited filename: " + filename);
         return false;
     }
 
     const auto lockPath = getLockFilePath(filename);
     const auto destRecordPath = getRecordFilePath(filename);
+    if (lockPath.string().find("..") != std::string::npos || destRecordPath.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in vault paths");
+        return false;
+    }
 
     // 1. Acquire POSIX advisory write lock (exclusive)
     int lockFdRaw = ::open(lockPath.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
@@ -673,23 +693,33 @@ bool VaultManager::encryptFile(const std::filesystem::path& srcFile, std::string
 bool VaultManager::decryptFile(const std::string& filename,
                               const std::filesystem::path& destFile,
                               std::string_view passphrase) {
-    if (!isValidVaultFilename(filename)) {
+    if (!isValidVaultFilename(filename) || filename.find("..") != std::string::npos || filename.find('/') != std::string::npos) {
         Logger::error("Invalid or prohibited vault filename: " + filename);
         return false;
     }
 
-    std::error_code ec;
-    if (std::filesystem::exists(destFile, ec) && std::filesystem::is_symlink(destFile, ec)) {
-        Logger::error("Destination cannot be an existing symbolic link (symlink defense): " + destFile.string());
+    auto cleanDest = destFile.lexically_normal();
+    if (cleanDest.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in destination path: " + destFile.string());
         return false;
     }
-    if (std::filesystem::is_directory(destFile, ec)) {
-        Logger::error("Destination cannot be a directory: " + destFile.string());
+
+    std::error_code ec;
+    if (std::filesystem::exists(cleanDest, ec) && std::filesystem::is_symlink(cleanDest, ec)) {
+        Logger::error("Destination cannot be an existing symbolic link (symlink defense): " + cleanDest.string());
+        return false;
+    }
+    if (std::filesystem::is_directory(cleanDest, ec)) {
+        Logger::error("Destination cannot be a directory: " + cleanDest.string());
         return false;
     }
 
     const auto lockPath = getLockFilePath(filename);
     const auto srcRecordPath = getRecordFilePath(filename);
+    if (lockPath.string().find("..") != std::string::npos || srcRecordPath.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in vault paths");
+        return false;
+    }
 
     if (!std::filesystem::exists(srcRecordPath, ec)) {
         Logger::error("Encrypted record not found in vault: " + filename);
@@ -990,7 +1020,7 @@ std::vector<VaultRecordInfo> VaultManager::listRecords() {
         }
 
         const auto lockPath = getLockFilePath(filename);
-        if (std::filesystem::exists(lockPath, ec)) {
+        if (lockPath.string().find("..") == std::string::npos && std::filesystem::exists(lockPath, ec)) {
             int fd = ::open(lockPath.c_str(), O_RDWR);
             if (fd >= 0) {
                 UniqueFd probeLock(fd);
@@ -1010,13 +1040,17 @@ std::vector<VaultRecordInfo> VaultManager::listRecords() {
 }
 
 bool VaultManager::deleteRecord(const std::string& filename) {
-    if (!isValidVaultFilename(filename)) {
+    if (!isValidVaultFilename(filename) || filename.find("..") != std::string::npos || filename.find('/') != std::string::npos) {
         Logger::error("Invalid or prohibited vault filename: " + filename);
         return false;
     }
 
     const auto lockPath = getLockFilePath(filename);
     const auto recordPath = getRecordFilePath(filename);
+    if (lockPath.string().find("..") != std::string::npos || recordPath.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in vault paths");
+        return false;
+    }
 
     std::error_code ec;
     if (!std::filesystem::exists(recordPath, ec)) {
@@ -1051,7 +1085,7 @@ bool VaultManager::deleteRecord(const std::string& filename) {
 }
 
 bool VaultManager::verifyRecord(const std::string& filename, std::string_view passphrase) {
-    if (!isValidVaultFilename(filename)) {
+    if (!isValidVaultFilename(filename) || filename.find("..") != std::string::npos || filename.find('/') != std::string::npos) {
         Logger::error("Invalid or prohibited vault filename: " + filename);
         return false;
     }
@@ -1059,6 +1093,10 @@ bool VaultManager::verifyRecord(const std::string& filename, std::string_view pa
     std::error_code ec;
     const auto lockPath = getLockFilePath(filename);
     const auto srcRecordPath = getRecordFilePath(filename);
+    if (lockPath.string().find("..") != std::string::npos || srcRecordPath.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in vault paths");
+        return false;
+    }
 
     if (!std::filesystem::exists(srcRecordPath, ec)) {
         Logger::error("Encrypted record not found in vault: " + filename);
@@ -1200,26 +1238,32 @@ bool VaultManager::verifyRecord(const std::string& filename, std::string_view pa
 }
 
 bool VaultManager::shredFile(const std::filesystem::path& targetFile) {
+    auto cleanTarget = targetFile.lexically_normal();
+    if (cleanTarget.string().find("..") != std::string::npos) {
+        Logger::error("Refusing to shred file with path traversal: " + targetFile.string());
+        return false;
+    }
+
     std::error_code ec;
-    if (std::filesystem::is_symlink(targetFile, ec)) {
-        Logger::error("Refusing to shred symbolic link: " + targetFile.string());
+    if (std::filesystem::is_symlink(cleanTarget, ec)) {
+        Logger::error("Refusing to shred symbolic link: " + cleanTarget.string());
         return false;
     }
 
-    if (!std::filesystem::exists(targetFile, ec) || !std::filesystem::is_regular_file(targetFile, ec)) {
-        Logger::error("Target file does not exist or is not a regular file for shredding: " + targetFile.string());
+    if (!std::filesystem::exists(cleanTarget, ec) || !std::filesystem::is_regular_file(cleanTarget, ec)) {
+        Logger::error("Target file does not exist or is not a regular file for shredding: " + cleanTarget.string());
         return false;
     }
 
-    const uintmax_t fileSize = std::filesystem::file_size(targetFile, ec);
+    const uintmax_t fileSize = std::filesystem::file_size(cleanTarget, ec);
     if (ec) {
         Logger::error("Failed to query target file size before shredding");
         return false;
     }
 
-    int fd = ::open(targetFile.c_str(), O_WRONLY | O_NOFOLLOW);
+    int fd = ::open(cleanTarget.c_str(), O_WRONLY | O_NOFOLLOW);
     if (fd < 0) {
-        Logger::error("Failed to open file for shredding: " + targetFile.string());
+        Logger::error("Failed to open file for shredding: " + cleanTarget.string());
         return false;
     }
     UniqueFd ufd(fd);
@@ -1279,30 +1323,47 @@ bool VaultManager::shredFile(const std::filesystem::path& targetFile) {
     }
 
     ufd.reset(-1);
-    std::filesystem::remove(targetFile, ec);
+    std::filesystem::remove(cleanTarget, ec);
     if (ec) {
-        Logger::error("Failed to unlink target file after shredding: " + targetFile.string());
+        Logger::error("Failed to unlink target file after shredding: " + cleanTarget.string());
         return false;
     }
 
-    Logger::info("Successfully shredded and unlinked file: " + targetFile.string());
+    Logger::info("Successfully shredded and unlinked file: " + cleanTarget.string());
     return true;
 }
 
+/**
+ * @brief Recursively archives and encrypts an entire directory tree into a single vault record.
+ *
+ * @param srcDir Path to the local directory hierarchy to archive.
+ * @param passphrase Secret user passphrase used to derive cryptographic keys.
+ * @param recordName Optional vault record name (defaults to srcDir folder name with .kvdir suffix).
+ * @return true if the directory was successfully archived, encrypted, and written atomically.
+ * @return false if validation failed, filesystem errors occurred, or encryption aborted.
+ *
+ * @details Traverses directory entries preserving POSIX modes and timestamps into the KVDIR1
+ * binary pack format, enforcing strict path normalization, before streaming through AES-256-CBC.
+ */
 bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
                                     std::string_view passphrase,
                                     const std::string& recordName) {
     std::error_code ec;
-    if (std::filesystem::is_symlink(srcDir, ec)) {
-        Logger::error("Source directory cannot be a symbolic link: " + srcDir.string());
+    auto cleanSrcDir = srcDir.lexically_normal();
+    if (cleanSrcDir.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in source directory: " + srcDir.string());
         return false;
     }
-    if (!std::filesystem::exists(srcDir, ec) || !std::filesystem::is_directory(srcDir, ec)) {
-        Logger::error("Source directory does not exist or is not a directory: " + srcDir.string());
+    if (std::filesystem::is_symlink(cleanSrcDir, ec)) {
+        Logger::error("Source directory cannot be a symbolic link: " + cleanSrcDir.string());
+        return false;
+    }
+    if (!std::filesystem::exists(cleanSrcDir, ec) || !std::filesystem::is_directory(cleanSrcDir, ec)) {
+        Logger::error("Source directory does not exist or is not a directory: " + cleanSrcDir.string());
         return false;
     }
 
-    std::string recName = recordName.empty() ? srcDir.filename().string() : recordName;
+    std::string recName = recordName.empty() ? cleanSrcDir.filename().string() : recordName;
     if (recName.empty()) {
         recName = "root_dir";
     }
@@ -1310,12 +1371,17 @@ bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
         recName += ".kvdir";
     }
 
-    if (!isValidVaultFilename(recName)) {
+    std::string safeRecName = std::filesystem::path(recName).filename().string();
+    if (!isValidVaultFilename(safeRecName) || safeRecName.find("..") != std::string::npos || safeRecName.find('/') != std::string::npos) {
         Logger::error("Invalid record name for directory archive: " + recName);
         return false;
     }
 
-    const std::filesystem::path tempPackPath = m_vaultPath / (".pack_" + std::to_string(::getpid()) + "_" + recName);
+    const std::filesystem::path tempPackPath = (m_vaultPath / (".pack_" + std::to_string(::getpid()) + "_" + safeRecName)).lexically_normal();
+    if (tempPackPath.string().find("..") != std::string::npos) {
+        Logger::error("Unsafe temporary archive path: " + tempPackPath.string());
+        return false;
+    }
     std::ofstream pack(tempPackPath, std::ios::binary | std::ios::trunc);
     if (!pack) {
         Logger::error("Failed to create temporary directory archive: " + tempPackPath.string());
@@ -1328,13 +1394,13 @@ bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
 
     std::vector<uint8_t> buffer(CHUNK_SIZE);
 
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(srcDir, ec)) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(cleanSrcDir, ec)) {
         if (entry.is_symlink(ec)) {
             Logger::warn("Skipping symbolic link in directory tree: " + entry.path().string());
             continue;
         }
 
-        std::string relPath = std::filesystem::relative(entry.path(), srcDir, ec).generic_string();
+        std::string relPath = std::filesystem::relative(entry.path(), cleanSrcDir, ec).generic_string();
         if (relPath.empty() || relPath == "." || relPath == "..") {
             continue;
         }
@@ -1399,7 +1465,13 @@ bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
     pack.flush();
     pack.close();
 
-    const std::filesystem::path namedTempPack = m_vaultPath / recName;
+    const std::filesystem::path namedTempPack = (m_vaultPath / safeRecName).lexically_normal();
+    if (namedTempPack.string().find("..") != std::string::npos) {
+        Logger::error("Unsafe destination archive pack path");
+        shredFile(tempPackPath);
+        return false;
+    }
+
     std::filesystem::rename(tempPackPath, namedTempPack, ec);
     if (ec) {
         Logger::error("Failed to rename temporary directory pack: " + ec.message());
@@ -1411,17 +1483,40 @@ bool VaultManager::encryptDirectory(const std::filesystem::path& srcDir,
     shredFile(namedTempPack);
 
     if (success) {
-        Logger::info("Successfully encrypted directory " + srcDir.string() + " as vault record: " + recName);
+        Logger::info("Successfully encrypted directory " + cleanSrcDir.string() + " as vault record: " + safeRecName);
     }
     return success;
 }
 
+/**
+ * @brief Decrypts and unpacks a directory archive record into a specified destination directory.
+ *
+ * @param recordName Name of the encrypted directory vault record.
+ * @param destDir Target directory where the archive contents will be extracted.
+ * @param passphrase Secret user passphrase used for authentication and decryption.
+ * @return true if the archive was cryptographically verified, decrypted, and extracted without errors.
+ * @return false if the record was not found, passphrase was incorrect, or path traversal was detected.
+ *
+ * @details Performs streaming authenticated decryption of the record into a temporary container,
+ * verifies the KVDIR1 magic signature, checks all relative file paths against directory traversal (Zip-Slip),
+ * creates destination subdirectories, extracts files, and restores original POSIX permissions and mtimes.
+ */
 bool VaultManager::decryptDirectory(const std::string& recordName,
                                     const std::filesystem::path& destDir,
                                     std::string_view passphrase) {
-    std::string actualRec = recordName;
-    std::error_code ec;
+    std::string actualRec = std::filesystem::path(recordName).filename().string();
+    if (!isValidVaultFilename(actualRec) || actualRec.find("..") != std::string::npos || actualRec.find('/') != std::string::npos) {
+        Logger::error("Invalid or unsafe record name: " + recordName);
+        return false;
+    }
 
+    auto cleanDestDir = destDir.lexically_normal();
+    if (cleanDestDir.string().find("..") != std::string::npos) {
+        Logger::error("Path traversal detected in destination directory: " + destDir.string());
+        return false;
+    }
+
+    std::error_code ec;
     if (!std::filesystem::exists(getRecordFilePath(actualRec), ec)) {
         if (!actualRec.ends_with(".kvdir") && std::filesystem::exists(getRecordFilePath(actualRec + ".kvdir"), ec)) {
             actualRec += ".kvdir";
@@ -1431,15 +1526,20 @@ bool VaultManager::decryptDirectory(const std::string& recordName,
         }
     }
 
-    if (!std::filesystem::exists(destDir, ec)) {
-        std::filesystem::create_directories(destDir, ec);
+    if (!std::filesystem::exists(cleanDestDir, ec)) {
+        std::filesystem::create_directories(cleanDestDir, ec);
         if (ec) {
-            Logger::error("Failed to create destination directory: " + destDir.string());
+            Logger::error("Failed to create destination directory: " + cleanDestDir.string());
             return false;
         }
     }
 
-    const std::filesystem::path tempUnpack = destDir / (".unpack_" + std::to_string(::getpid()) + "_" + actualRec);
+    const std::filesystem::path tempUnpack = (cleanDestDir / (".unpack_" + std::to_string(::getpid()) + "_" + actualRec)).lexically_normal();
+    if (tempUnpack.string().find("..") != std::string::npos) {
+        Logger::error("Unsafe temporary unpack path");
+        return false;
+    }
+
     if (!decryptFile(actualRec, tempUnpack, passphrase)) {
         Logger::error("Failed to decrypt directory record: " + actualRec);
         shredFile(tempUnpack);
@@ -1499,7 +1599,13 @@ bool VaultManager::decryptDirectory(const std::string& recordName,
         uint64_t mtime = le64toh(mtimeLe);
         uint64_t fileSize = le64toh(fileSizeLe);
 
-        const std::filesystem::path target = destDir / relPath;
+        const std::filesystem::path target = (cleanDestDir / relPath).lexically_normal();
+        auto relCheck = std::filesystem::relative(target, cleanDestDir, ec);
+        if (relCheck.empty() || relCheck.string().starts_with("..") || relCheck.is_absolute() || target.string().find("..") != std::string::npos) {
+            Logger::error("Path traversal attempt in archive: " + relPath);
+            extractSuccess = false;
+            break;
+        }
 
         if (type == 1) { // Directory
             std::filesystem::create_directories(target, ec);
@@ -1550,7 +1656,7 @@ bool VaultManager::decryptDirectory(const std::string& recordName,
     shredFile(tempUnpack);
 
     if (extractSuccess) {
-        Logger::info("Successfully restored directory archive " + actualRec + " to: " + destDir.string());
+        Logger::info("Successfully restored directory archive " + actualRec + " to: " + cleanDestDir.string());
     } else {
         Logger::error("Directory archive extraction failed for: " + actualRec);
     }
