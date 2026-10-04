@@ -54,7 +54,15 @@ sudo apt update
 sudo apt install -y build-essential cmake libgtest-dev qt6-base-dev
 ```
 
-### Step 2: Build KernelVault
+### Step 2: Clone the Repository
+Clone the KernelVault codebase into your Linux user home directory:
+
+```bash
+git clone https://github.com/sky-ruler/KernelVault.git
+cd KernelVault
+```
+
+### Step 3: Build KernelVault
 From the repository root directory:
 
 ```bash

@@ -14,7 +14,7 @@ sudo apt install -y git build-essential cmake libgtest-dev qt6-base-dev
 If starting from a fresh clone, clone it into a Linux filesystem directory. In WSL, use `$HOME` (for example, `~/KernelVault`) rather than `/mnt/c`; Windows-mounted paths may prevent CMake from creating generated files. CMake can fetch GoogleTest if the system package cannot be found, which requires network access.
 
 ```bash
-git clone <repo-url> "$HOME/KernelVault"
+git clone https://github.com/sky-ruler/KernelVault.git "$HOME/KernelVault"
 cd "$HOME/KernelVault"
 ```
 

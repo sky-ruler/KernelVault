@@ -53,8 +53,14 @@ Ensure your development workstation has:
 
 1. **Fork and Clone:**
    ```bash
-   git clone https://github.com/<your-username>/KernelVault.git
+   # Clone the official repository:
+   git clone https://github.com/sky-ruler/KernelVault.git
    cd KernelVault
+
+   # Or if contributing from your personal GitHub fork:
+   # git clone https://github.com/<your-username>/KernelVault.git
+   # cd KernelVault
+   # git remote add upstream https://github.com/sky-ruler/KernelVault.git
    ```
 
 2. **Configure and Build:**
@@ -113,5 +119,5 @@ KernelVault adheres to the [Conventional Commits](https://www.conventionalcommit
    - `docs/interview-updates`
 2. **Commit Hygiene:** Ensure commits are atomic and logically structured.
 3. **Open a PR:** Fill out the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md) completely.
-4. **CI Checks:** Automated GitHub Actions will build GCC and Clang matrices, run CodeQL security scanning, execute all 32 tests, and audit memory sanitizers.
+4. **CI Checks:** Automated GitHub Actions will build GCC and Clang matrices, run CodeQL security scanning, execute all 34 tests, and audit memory sanitizers.
 5. **Review:** Maintainers will review code within 3 business days.

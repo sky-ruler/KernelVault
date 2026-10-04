@@ -70,7 +70,7 @@ Complete Ubuntu's first-run account setup. Then run the following commands in th
 ```bash
 sudo apt update
 sudo apt install -y git build-essential cmake libgtest-dev qt6-base-dev
-git clone <repository-url>
+git clone https://github.com/sky-ruler/KernelVault.git
 cd KernelVault
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DBUILD_GUI=ON
 cmake --build build --parallel
